@@ -1,0 +1,32 @@
+# Leitor de Desligamentos - Cartão Mais Infância Ceará (CMIC)
+# Dependências do projeto
+
+# Core
+pdfplumber>=0.10.0           # Extração de texto de PDFs
+PyPDF2>=4.0.0                # Manipulação alternativa de PDFs
+
+# OCR (opcional, para fallback em PDFs scaneados)
+pytesseract>=0.3.10          # Interface Python para Tesseract OCR
+pdf2image>=1.16.0            # Conversão de PDF para imagens
+python-dotenv>=1.0.0         # Carregamento de variáveis de ambiente
+
+# Data processing e export
+pandas>=2.0.0                # Manipulação de dados em tabelas
+openpyxl>=3.10.0             # Escrita de arquivos Excel (.xlsx)
+xlsxwriter>=3.1.0            # Alternativa para escrita Excel
+
+# Development e testing
+pytest>=7.0.0                # Framework de testes
+pytest-cov>=4.0.0            # Coverage para testes
+black>=23.0.0                # Formatação de código
+flake8>=6.0.0                # Linting
+isort>=5.12.0                # Ordenação de imports
+
+# Logging e debugging
+loguru>=0.7.0                # Logging avançado (opcional)
+
+# Requisitos do sistema (a instalar separadamente):
+# - Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki
+#   Windows: choco install tesseract -y
+#   Linux: sudo apt-get install tesseract-ocr
+#   macOS: brew install tesseract

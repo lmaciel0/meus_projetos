@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  leitor-desligamentos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: leitor-desligamentos-cmic
+    
+    volumes:
+      # Mapear pasta de entrada (PDFs)
+      - ./pdfs:/app/input:ro
+      # Mapear pasta de saída (XLSX/CSV)
+      - ./resultado:/app/output:rw
+    
+    environment:
+      # Configurações opcionais
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    
+    # Executar sem interatividade
+    stdin_open: false
+    tty: false
+
+# Exemplo de uso:
+# docker-compose up
+# 
+# Ou com argumentos customizados:
+# docker-compose run --rm leitor-desligamentos \
+#   --entrada /app/input \
+#   --saida /app/output \
+#   --formato xlsx
