@@ -31,7 +31,7 @@ def _refresh_status(dataframe: pd.DataFrame) -> pd.DataFrame:
     for column in DISPLAY_COLUMNS:
         if column not in result:
             result[column] = ""
-    for field in [*FIELDS, "ARQUIVO", "STATUS"]:
+    for field in [*FIELDS, "ARQUIVO", "Referencia", "STATUS"]:
         result[field] = result[field].fillna("").astype(str)
     result["STATUS"] = result.apply(lambda row: status_for(row.to_dict()), axis=1)
     return result[DISPLAY_COLUMNS]
@@ -47,11 +47,24 @@ def _current_issues(dataframe: pd.DataFrame) -> list[dict[str, str]]:
 
 if "records" not in st.session_state:
     st.session_state.records = _empty_dataframe()
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 st.title("Leitor de desligamentos")
 st.caption("Cartão Mais Infância Ceará | extração local de PDFs")
 
-uploads = st.file_uploader("Selecione os PDFs de desligamento", type=["pdf"], accept_multiple_files=True)
+upload_columns = st.columns([4, 1])
+uploads = upload_columns[0].file_uploader(
+    "Selecione os PDFs de desligamento",
+    type=["pdf"],
+    accept_multiple_files=True,
+    key=f"pdf_uploader_{st.session_state.uploader_key}",
+)
+if upload_columns[1].button("Limpar dados", use_container_width=True):
+    st.session_state.records = _empty_dataframe()
+    st.session_state.pop("initial_issues", None)
+    st.session_state.uploader_key += 1
+    st.rerun()
 ocr_enabled = st.checkbox("Usar OCR quando o PDF não tiver texto selecionável", value=True)
 
 if st.button("Processar arquivos", type="primary", disabled=not uploads):
@@ -95,25 +108,31 @@ else:
         filtered = filtered[filtered["STATUS"].isin(selected_status)]
 
     st.subheader("Resultados")
+    display_filtered = filtered.copy()
+    display_filtered["STATUS"] = display_filtered["STATUS"].map(
+        {"OK": "✅ OK", "REVISAR": "⚠️ REVISAR"}
+    ).fillna(display_filtered["STATUS"])
     edited = st.data_editor(
-        filtered,
+        display_filtered,
         hide_index=True,
         use_container_width=True,
         num_rows="fixed",
-        disabled=["ARQUIVO", "STATUS"],
+        disabled=["ARQUIVO", "Referencia", "STATUS"],
         column_config={
             "ARQUIVO": st.column_config.TextColumn("Arquivo", width="medium"),
+            "Referencia": st.column_config.TextColumn("Referencia", width="small"),
             "MUNICIPIO": st.column_config.TextColumn("Município"),
             "CPF": st.column_config.TextColumn("CPF", help="Mantido como texto com 11 dígitos"),
             "NIS": st.column_config.TextColumn("NIS"),
             "NOME": st.column_config.TextColumn("Nome", width="large"),
             "MOTIVO": st.column_config.TextColumn("Motivo", width="large"),
-            "STATUS": st.column_config.TextColumn("Status"),
+            "STATUS": st.column_config.TextColumn("Status", help="✅ indica registro completo; ⚠️ requer revisão"),
         },
         key="records_editor",
     )
-    if not edited.equals(filtered):
-        st.session_state.records.loc[edited.index, FIELDS] = edited[FIELDS]
+    editable_columns = list(FIELDS)
+    if not edited[editable_columns].equals(filtered[editable_columns]):
+        st.session_state.records.loc[edited.index, editable_columns] = edited[editable_columns]
         st.session_state.records = _refresh_status(st.session_state.records)
         st.rerun()
 

@@ -6,9 +6,10 @@ Aplicação local em Streamlit para extrair, revisar e exportar dados de formul�
 
 - Upload de vários PDFs e processamento de todas as páginas.
 - Extração nativa com `pdfplumber` e fallback de OCR com `pytesseract`/`pdf2image`.
-- Campos `MUNICIPIO`, `CPF`, `NIS`, `NOME` e `MOTIVO` em tabela editável.
+- Colunas `Arquivo`, `Referencia`, `MUNICIPIO`, `CPF`, `NIS`, `NOME` e `MOTIVO` em tabela editável.
+- Data de referência preenchida com o dia do processamento e botão para limpar a seleção e os resultados.
 - CPF e NIS preservados como texto, incluindo zeros à esquerda.
-- Status automático `OK` ou `REVISAR` e lista de inconsistências por arquivo.
+- Status automático `OK` ou `REVISAR`, exibido com indicadores verde/vermelho, e lista de inconsistências por arquivo.
 - Filtros por município, motivo e status.
 - Download em XLSX, CSV UTF-8 separado por ponto e vírgula e XLSX apenas dos registros `REVISAR`.
 - Sem banco de dados: os arquivos são gravados apenas em diretórios temporários durante o processamento e removidos ao final.

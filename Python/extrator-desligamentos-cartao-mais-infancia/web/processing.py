@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import tempfile
+from datetime import date
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Protocol
 
 import pandas as pd
 
@@ -12,11 +13,18 @@ from parser import FIELDS, inconsistencies, parse_text, status_for
 from pdf_extractor import PDFExtractor
 
 
-DISPLAY_COLUMNS = ["ARQUIVO", *FIELDS, "STATUS"]
+DISPLAY_COLUMNS = ["ARQUIVO", "Referencia", *FIELDS, "STATUS"]
+
+
+class UploadFile(Protocol):
+    name: str
+
+    def getvalue(self) -> bytes:
+        ...
 
 
 def process_uploads(
-    uploads: Iterable[object],
+    uploads: Iterable[UploadFile],
     progress: Callable[[int], None] | None = None,
     ocr_enabled: bool = True,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
@@ -28,6 +36,7 @@ def process_uploads(
         filename = str(getattr(upload, "name", "arquivo.pdf"))
         row = {field: "" for field in FIELDS}
         row["ARQUIVO"] = filename
+        row["Referencia"] = date.today().strftime("%d/%m/%Y")
         try:
             with tempfile.TemporaryDirectory(prefix="leitor_desligamentos_") as temp_dir:
                 path = Path(temp_dir) / Path(filename).name
