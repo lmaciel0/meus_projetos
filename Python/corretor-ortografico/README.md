@@ -1,13 +1,19 @@
 # Corretor de Textos
 
-Sistema local de revisão de textos de ficção em português do Brasil, usando Claude (Anthropic API), Streamlit e SQLite.
+Sistema local e gratuito de revisão de textos de ficção em português do Brasil, usando LanguageTool, Streamlit e SQLite. Funciona offline e não usa nenhuma API paga.
 
-Corrige ortografia, acentuação, pontuação, crase e concordância, sem mexer no estilo e na voz do autor.
+- **Aplicado automaticamente:** ortografia, acentuação, pontuação, crase e maiúsculas.
+- **Sugestão com checkbox:** concordância verbal e nominal. O LanguageTool erra com mais frequência nesses casos, então cada uma só entra no texto se você marcar. A escolha fica salva no histórico.
+- **Só observação:** sugestões de estilo (coloquialismos, abreviações, repetições) nunca são aplicadas, para preservar a voz do autor.
+
+## Requisitos
+
+- Python 3.10+
+- Java 17+ (o LanguageTool roda localmente em Java)
 
 ## Como rodar
 
-1. Copie `.env.example` para `.env` e preencha `ANTHROPIC_API_KEY`.
-2. Dê um clique duplo em `iniciar.bat`. Na primeira vez ele cria o `.venv` e instala as dependências.
+Dê um clique duplo em `iniciar.bat`. Na primeira vez ele cria o `.venv` e instala as dependências. A primeira correção baixa o LanguageTool (~260 MB, só uma vez) e leva cerca de 1 minuto para iniciar.
 
 Ou, manualmente:
 
@@ -20,6 +26,5 @@ python -m venv .venv
 ## Estrutura
 
 - `app.py` – interface Streamlit (abas Corrigir e Histórico)
-- `corretor.py` – chamada à API da Anthropic
-- `prompts.py` – system prompt e schema JSON da resposta
+- `corretor.py` – verificação com LanguageTool e aplicação das correções
 - `db.py` – histórico em SQLite (`historico.db`, criado automaticamente)
