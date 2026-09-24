@@ -1,41 +1,80 @@
 import streamlit as st
 
 import db
-from corretor import MODELO, ErroCorrecao, corrigir
+from corretor import ErroCorrecao, aplicar, corrigir
 
 st.set_page_config(page_title="Corretor de Textos", page_icon="✍️", layout="wide")
 db.inicializar()
 
 
-def exibir_resultado(chave: str, original: str, corrigido: str, correcoes: list[dict], observacoes: str) -> None:
-    col_orig, col_corr = st.columns(2)
-    with col_orig:
-        st.markdown("**Original**")
-        st.text_area("Original", original, height=400, disabled=True, label_visibility="collapsed", key=f"orig_{chave}")
-    with col_corr:
-        st.markdown("**Corrigido**")
-        st.text_area("Corrigido", corrigido, height=400, label_visibility="collapsed", key=f"corr_{chave}")
+def exibir_resultado(registro: dict, editavel: bool) -> None:
+    rid, original, correcoes = registro["id"], registro["texto_original"], registro["correcoes"]
+    chave = f"{'edit' if editavel else 'hist'}_{rid}"
+    automaticas = [c for c in correcoes if c["tipo"] == "automatica"]
+    sugestoes = [c for c in correcoes if c["tipo"] == "sugestao"]
 
-    st.subheader(f"Correções ({len(correcoes)})")
-    if correcoes:
+    # Os textos ficam no topo, mas dependem dos checkboxes renderizados abaixo.
+    area_textos = st.container()
+
+    st.subheader(f"Correções aplicadas ({len(automaticas)})")
+    if automaticas:
         st.dataframe(
-            [
-                {"Original": c["original"], "Corrigido": c["corrigido"], "Motivo": c["motivo"]}
-                for c in correcoes
-            ],
+            [{"Original": c["original"], "Corrigido": c["corrigido"], "Motivo": c["motivo"]} for c in automaticas],
             width="stretch",
             hide_index=True,
         )
     else:
-        st.success("Nenhuma correção necessária.")
+        st.success("Nenhuma correção ortográfica necessária.")
 
-    if observacoes.strip():
-        st.subheader("Observações")
-        st.info(observacoes)
+    if sugestoes and editavel:
+        st.subheader(f"Sugestões de concordância ({len(sugestoes)})")
+        st.caption("Não são aplicadas automaticamente. Marque as que quiser aceitar.")
+        for i, c in enumerate(sugestoes):
+            c["aceita"] = st.checkbox(
+                f"“{c['original']}” → “{c['corrigido']}” — {c['motivo']}",
+                value=c["aceita"],
+                key=f"sug_{rid}_{i}",
+            )
+    elif sugestoes:
+        st.subheader(f"Sugestões de concordância ({len(sugestoes)})")
+        st.dataframe(
+            [
+                {
+                    "Status": "✅ aceita" if c["aceita"] else "❌ recusada",
+                    "Original": c["original"],
+                    "Sugestão": c["corrigido"],
+                    "Motivo": c["motivo"],
+                }
+                for c in sugestoes
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    corrigido = aplicar(original, correcoes)
+    if corrigido != registro["texto_corrigido"]:
+        registro["texto_corrigido"] = corrigido
+        db.atualizar(rid, corrigido, correcoes)
+
+    with area_textos:
+        col_orig, col_corr = st.columns(2)
+        with col_orig:
+            st.markdown("**Original**")
+            st.text_area("Original", original, height=400, disabled=True, label_visibility="collapsed", key=f"orig_{chave}")
+        with col_corr:
+            st.markdown("**Corrigido**")
+            # A chave muda junto com o texto para o campo refletir cada checkbox marcado.
+            st.text_area(
+                "Corrigido", corrigido, height=400, label_visibility="collapsed", key=f"corr_{chave}_{hash(corrigido)}"
+            )
+
+    if registro["observacoes"].strip():
+        st.subheader("Observações de estilo (não aplicadas)")
+        st.info(registro["observacoes"])
 
 
 st.title("✍️ Corretor de Textos")
-st.caption(f"Revisão ortográfica e gramatical preservando o estilo do autor · modelo `{MODELO}`")
+st.caption("Revisão ortográfica e gramatical preservando o estilo do autor · LanguageTool (offline, gratuito)")
 
 aba_corrigir, aba_historico = st.tabs(["Corrigir", "Histórico"])
 
@@ -43,24 +82,19 @@ with aba_corrigir:
     texto = st.text_area("Cole ou digite seu texto", height=250, placeholder="Era uma vez...")
 
     if st.button("Corrigir texto", type="primary", disabled=not texto.strip()):
-        with st.spinner("Revisando o texto..."):
+        with st.spinner("Revisando o texto... (a primeira correção demora mais: o LanguageTool está iniciando)"):
             try:
                 resultado = corrigir(texto)
             except ErroCorrecao as e:
                 st.error(str(e))
             else:
                 registro_id = db.salvar(texto, resultado.texto_corrigido, resultado.correcoes, resultado.observacoes)
-                st.session_state["ultimo"] = (
-                    f"novo_{registro_id}",
-                    texto,
-                    resultado.texto_corrigido,
-                    resultado.correcoes,
-                    resultado.observacoes,
-                )
+                st.session_state["ultimo_id"] = registro_id
 
-    if "ultimo" in st.session_state:
+    ultimo = db.obter(st.session_state["ultimo_id"]) if "ultimo_id" in st.session_state else None
+    if ultimo:
         st.divider()
-        exibir_resultado(*st.session_state["ultimo"])
+        exibir_resultado(ultimo, editavel=True)
 
 with aba_historico:
     registros = db.listar()
@@ -69,8 +103,9 @@ with aba_historico:
 
     for r in registros:
         previa = r["texto_original"][:80].replace("\n", " ")
-        with st.expander(f"{r['data']} · {len(r['correcoes'])} correções · {previa}…"):
-            exibir_resultado(f"hist_{r['id']}", r["texto_original"], r["texto_corrigido"], r["correcoes"], r["observacoes"])
+        aceitas = sum(c["aceita"] for c in r["correcoes"])
+        with st.expander(f"{r['data']} · {aceitas} correções · {previa}…"):
             if st.button("Excluir", key=f"excluir_{r['id']}"):
                 db.excluir(r["id"])
                 st.rerun()
+            exibir_resultado(r, editavel=False)

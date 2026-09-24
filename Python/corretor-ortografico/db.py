@@ -46,3 +46,17 @@ def listar() -> list[dict]:
 def excluir(registro_id: int) -> None:
     with closing(_conectar()) as conn, conn:
         conn.execute("DELETE FROM historico WHERE id = ?", (registro_id,))
+
+
+def obter(registro_id: int) -> dict | None:
+    with closing(_conectar()) as conn:
+        linha = conn.execute("SELECT * FROM historico WHERE id = ?", (registro_id,)).fetchone()
+    return {**dict(linha), "correcoes": json.loads(linha["correcoes"])} if linha else None
+
+
+def atualizar(registro_id: int, texto_corrigido: str, correcoes: list[dict]) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute(
+            "UPDATE historico SET texto_corrigido = ?, correcoes = ? WHERE id = ?",
+            (texto_corrigido, json.dumps(correcoes, ensure_ascii=False), registro_id),
+        )
