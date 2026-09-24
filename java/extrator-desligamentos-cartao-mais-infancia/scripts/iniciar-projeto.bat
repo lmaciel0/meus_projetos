@@ -47,15 +47,44 @@ if not defined MVN_CMD (
     exit /b 1
 )
 
-:: 3. Iniciar Backend
-start "Extrator Desligamentos - Backend" cmd /k "cd /d "%PROJ_ROOT%\backend" && (if not exist "target\extrator-desligamentos-1.0.0.jar" %MVN_CMD% -q -DskipTests package) && java -jar target\extrator-desligamentos-1.0.0.jar"
+title Extrator de Desligamentos
 
-:: 4. Iniciar Frontend
-start "Extrator Desligamentos - Frontend" cmd /k "cd /d "%PROJ_ROOT%\frontend" && (if not exist "node_modules" call npm install) && npm run dev"
+:: 3. Se o projeto ja estiver aberto, apenas abrir o navegador
+curl.exe -s -f -o nul http://localhost:8080/api/saude >nul 2>&1
+if not errorlevel 1 (
+    echo O Extrator ja esta em execucao. Abrindo o navegador...
+    start "" http://localhost:8080
+    exit /b 0
+)
 
+:: 4. Gerar a versao final do frontend (servida pelo proprio backend)
+echo Gerando o frontend...
+cd /d "%PROJ_ROOT%\frontend"
+if not exist "node_modules" call npm install
+if errorlevel 1 goto erro
+call npm run build
+if errorlevel 1 goto erro
+
+:: 5. Abrir o navegador assim que a aplicacao responder (em segundo plano)
+start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i = 0; $i -lt 180; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:8080/api/saude).Content -eq 'ok') { Start-Process 'http://localhost:8080'; break } } catch {}; Start-Sleep 2 }"
+
+:: 6. Iniciar o backend nesta janela (recompila o codigo alterado a cada inicializacao)
+echo.
 echo ==========================================================
-echo  Extrator de Desligamentos (Java + React) iniciado!
-echo  Backend:  http://localhost:8080
-echo  Frontend: http://localhost:5173
+echo  Extrator de Desligamentos iniciando em http://localhost:8080
+echo  O navegador abrira automaticamente.
+echo  Para encerrar, feche esta janela.
 echo ==========================================================
+echo.
+cd /d "%PROJ_ROOT%\backend"
+set "SPRING_WEB_RESOURCES_STATICLOCATIONS=file:../frontend/dist/"
+%MVN_CMD% -q spring-boot:run
+if errorlevel 1 goto erro
 endlocal
+exit /b 0
+
+:erro
+echo.
+echo [ERRO] Nao foi possivel iniciar o Extrator. Veja as mensagens acima.
+pause
+exit /b 1
