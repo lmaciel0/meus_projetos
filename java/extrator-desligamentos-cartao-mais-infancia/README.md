@@ -44,13 +44,11 @@ POST /api/exportar/xlsx-revisar
 
 ### Inicialização rápida
 
-**Windows:**
+**Windows:** dê dois cliques em `Iniciar Extrator.bat` na raiz do projeto.
 
-```bat
-scripts\iniciar-projeto.bat
-```
+O script gera o frontend (`npm run build`), inicia o backend numa única janela servindo a interface e a API em `http://localhost:8080` e abre o navegador. Para encerrar, feche a janela.
 
-**Linux/macOS:**
+**Linux/macOS** (modo desenvolvimento, dois servidores):
 
 ```bash
 chmod +x scripts/iniciar-projeto.sh
