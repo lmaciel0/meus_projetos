@@ -1,0 +1,2 @@
+streamlit>=1.40
+language_tool_python>=3.0
