@@ -37,10 +37,19 @@ def salvar(texto_original: str, texto_corrigido: str, correcoes: list[dict], obs
         return cur.lastrowid
 
 
+def _para_dict(linha: sqlite3.Row) -> dict:
+    correcoes = json.loads(linha["correcoes"])
+    # Registros da versão anterior (API da Anthropic) não tinham tipo nem aceite.
+    for c in correcoes:
+        c.setdefault("tipo", "automatica")
+        c.setdefault("aceita", True)
+    return {**dict(linha), "correcoes": correcoes}
+
+
 def listar() -> list[dict]:
     with closing(_conectar()) as conn:
         linhas = conn.execute("SELECT * FROM historico ORDER BY id DESC").fetchall()
-    return [{**dict(l), "correcoes": json.loads(l["correcoes"])} for l in linhas]
+    return [_para_dict(l) for l in linhas]
 
 
 def excluir(registro_id: int) -> None:
@@ -51,7 +60,7 @@ def excluir(registro_id: int) -> None:
 def obter(registro_id: int) -> dict | None:
     with closing(_conectar()) as conn:
         linha = conn.execute("SELECT * FROM historico WHERE id = ?", (registro_id,)).fetchone()
-    return {**dict(linha), "correcoes": json.loads(linha["correcoes"])} if linha else None
+    return _para_dict(linha) if linha else None
 
 
 def atualizar(registro_id: int, texto_corrigido: str, correcoes: list[dict]) -> None:
