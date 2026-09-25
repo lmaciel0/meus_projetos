@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass, field
 
 import language_tool_python
@@ -28,16 +29,20 @@ class Resultado:
 
 
 _tool: language_tool_python.LanguageTool | None = None
+# O Streamlit roda cada sessão numa thread: sem a trava, dois cliques simultâneos
+# na primeira correção iniciariam dois servidores Java.
+_tool_lock = threading.Lock()
 
 
 def _get_tool() -> language_tool_python.LanguageTool:
     global _tool
-    if _tool is None:
-        try:
-            _tool = language_tool_python.LanguageTool("pt-BR")
-        except Exception as e:
-            raise ErroCorrecao(f"Não foi possível iniciar o LanguageTool (é preciso ter Java instalado): {e}")
-    return _tool
+    with _tool_lock:
+        if _tool is None:
+            try:
+                _tool = language_tool_python.LanguageTool("pt-BR")
+            except Exception as e:
+                raise ErroCorrecao(f"Não foi possível iniciar o LanguageTool (é preciso ter Java instalado): {e}") from e
+        return _tool
 
 
 def _e_atribuicao_de_dialogo(texto: str, match) -> bool:
@@ -49,12 +54,18 @@ def _e_atribuicao_de_dialogo(texto: str, match) -> bool:
     return antes.endswith(("?", "!")) and any(t in texto[inicio_linha : match.offset] for t in ("—", "–"))
 
 
-def _sugestao(trecho: str, match) -> str:
-    """Primeira sugestão, sem capitalizar uma palavra que o autor escreveu em minúscula."""
+def _sugestao(trecho: str, match) -> str | None:
+    """Primeira sugestão, sem capitalizar uma palavra que o autor escreveu em minúscula.
+
+    Retorna None quando, depois disso, não sobra nada a corrigir (ex.: "brasil" → "Brasil").
+    """
+    if not match.replacements:
+        return None
     sugestao = match.replacements[0]
-    if match.category != "CASING" and trecho[:1].islower() and sugestao[:1].isupper():
+    # Siglas ("eua" → "EUA") não são rebaixadas: viraria "eUA".
+    if match.category != "CASING" and trecho[:1].islower() and sugestao[:1].isupper() and not sugestao[1:2].isupper():
         sugestao = sugestao[0].lower() + sugestao[1:]
-    return sugestao
+    return sugestao if sugestao != trecho else None
 
 
 def _e_estilo(match) -> bool:
@@ -81,19 +92,19 @@ def corrigir(texto: str) -> Resultado:
     except ErroCorrecao:
         raise
     except Exception as e:
-        raise ErroCorrecao(f"Erro ao verificar o texto: {e}")
+        raise ErroCorrecao(f"Erro ao verificar o texto: {e}") from e
 
     correcoes, observacoes, fim_anterior = [], [], 0
     for m in sorted(matches, key=lambda m: m.offset):
         trecho = texto[m.offset : m.offset + m.error_length]
         if _e_atribuicao_de_dialogo(texto, m):
             continue
-        if _e_estilo(m) or not m.replacements:
+        corrigido = _sugestao(trecho, m)
+        # Correções sobrepostas não podem ser aplicadas juntas; fica a primeira e
+        # as demais viram observação em vez de sumirem.
+        if _e_estilo(m) or corrigido is None or m.offset < fim_anterior:
             sugestao = f" (sugestão: “{m.replacements[0]}”)" if m.replacements else ""
             observacoes.append(f"“{trecho}”: {m.message}{sugestao}")
-            continue
-        # Correções sobrepostas não podem ser aplicadas juntas; fica a primeira.
-        if m.offset < fim_anterior:
             continue
         fim_anterior = m.offset + m.error_length
 
@@ -106,7 +117,7 @@ def corrigir(texto: str) -> Resultado:
                 "offset": m.offset,
                 "tamanho": m.error_length,
                 "original": trecho,
-                "corrigido": _sugestao(trecho, m),
+                "corrigido": corrigido,
                 "motivo": motivo,
                 "tipo": "automatica" if automatica else "sugestao",
                 "aceita": automatica,
