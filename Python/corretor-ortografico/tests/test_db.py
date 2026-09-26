@@ -28,3 +28,20 @@ def test_migra_banco_antigo_sem_coluna_arquivo(tmp_path, monkeypatch):
 
     assert [r["arquivo"] for r in db.listar()] == ["conto.pdf", ""]
     assert db.obter(novo)["arquivo"] == "conto.pdf"
+
+
+def test_dicionario_pessoal_e_correcoes_fixas(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "historico.db")
+    db.inicializar()
+
+    db.adicionar_ignorada("  Aelin ")
+    db.adicionar_ignorada("aelin")  # repetida, não duplica
+    db.adicionar_fixa("Tava", "estava")
+    db.adicionar_fixa("tava", "estava mesmo")  # atualiza a existente
+    assert db.listar_ignoradas() == ["aelin"]
+    assert db.listar_fixas() == {"tava": "estava mesmo"}
+
+    db.remover_ignorada("aelin")
+    db.remover_fixa("tava")
+    assert db.listar_ignoradas() == []
+    assert db.listar_fixas() == {}
