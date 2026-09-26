@@ -14,7 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 rem Fora do bloco acima: se uma instalacao anterior falhou no meio, tenta de novo.
-.venv\Scripts\python.exe -c "import streamlit, language_tool_python" >nul 2>&1
+.venv\Scripts\python.exe -c "import streamlit, language_tool_python, pypdf" >nul 2>&1
 if errorlevel 1 (
     echo Instalando dependencias...
     .venv\Scripts\python.exe -m pip install -r requirements.txt || (pause & exit /b 1)
