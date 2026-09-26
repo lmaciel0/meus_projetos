@@ -54,14 +54,29 @@ def _e_atribuicao_de_dialogo(texto: str, match) -> bool:
     return antes.endswith(("?", "!")) and any(t in texto[inicio_linha : match.offset] for t in ("—", "–"))
 
 
+def _escolher(trecho: str, replacements: list[str]) -> str:
+    """Primeira sugestão, salvo quando ela reescreve palavras que estavam certas.
+
+    Em "uma ves" o corretor ortográfico sugere primeiro "um aves" (move o espaço) e só
+    depois "uma vez". Se a primeira sugestão mantém o número de palavras, fica a que
+    altera menos palavras; empates mantêm a ordem do LanguageTool. Junções como
+    "com migo" → "comigo" mudam o número de palavras e não são afetadas.
+    """
+    palavras, primeira = trecho.split(), replacements[0]
+    if len(palavras) < 2 or len(primeira.split()) != len(palavras):
+        return primeira
+    candidatas = [r for r in replacements if len(r.split()) == len(palavras)]
+    return min(candidatas, key=lambda r: sum(a != b for a, b in zip(palavras, r.split())))
+
+
 def _sugestao(trecho: str, match) -> str | None:
-    """Primeira sugestão, sem capitalizar uma palavra que o autor escreveu em minúscula.
+    """Melhor sugestão, sem capitalizar uma palavra que o autor escreveu em minúscula.
 
     Retorna None quando, depois disso, não sobra nada a corrigir (ex.: "brasil" → "Brasil").
     """
     if not match.replacements:
         return None
-    sugestao = match.replacements[0]
+    sugestao = _escolher(trecho, match.replacements)
     # Siglas ("eua" → "EUA") não são rebaixadas: viraria "eUA".
     if match.category != "CASING" and trecho[:1].islower() and sugestao[:1].isupper() and not sugestao[1:2].isupper():
         sugestao = sugestao[0].lower() + sugestao[1:]
@@ -109,8 +124,9 @@ def corrigir(texto: str) -> Resultado:
         fim_anterior = m.offset + m.error_length
 
         motivo = m.message
-        if len(m.replacements) > 1:
-            motivo += f" (alternativas: {', '.join(m.replacements[1:3])})"
+        alternativas = [r for r in m.replacements if r.lower() != corrigido.lower()][:2]
+        if alternativas:
+            motivo += f" (alternativas: {', '.join(alternativas)})"
         automatica = not _e_sugestao(m)
         correcoes.append(
             {
