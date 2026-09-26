@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import streamlit as st
 
 import db
 from corretor import ErroCorrecao, aplicar, corrigir
+from pdf import extrair_texto
 
 st.set_page_config(page_title="Corretor de Textos", page_icon="✍️", layout="wide")
 db.inicializar()
@@ -73,6 +76,15 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
             st.text_area(
                 "Corrigido", corrigido, height=400, label_visibility="collapsed", key=f"corr_{chave}_{hash(corrigido)}"
             )
+            nome = Path(registro["arquivo"]).stem if registro["arquivo"] else "texto"
+            st.download_button(
+                "Baixar texto corrigido (.txt)",
+                corrigido,
+                file_name=f"{nome}_corrigido.txt",
+                mime="text/plain",
+                on_click="ignore",
+                key=f"baixar_{chave}",
+            )
 
     if registro["observacoes"].strip():
         st.subheader("Observações de estilo (não aplicadas)")
@@ -85,21 +97,36 @@ st.caption("Revisão ortográfica e gramatical preservando o estilo do autor · 
 aba_corrigir, aba_historico = st.tabs(["Corrigir", "Histórico"])
 
 with aba_corrigir:
-    texto = st.text_area("Cole ou digite seu texto", height=250, placeholder="Era uma vez...")
+    modo = st.radio("Entrada", ["Colar texto", "Enviar PDF"], horizontal=True, label_visibility="collapsed")
+    if modo == "Colar texto":
+        texto = st.text_area("Cole ou digite seu texto", height=250, placeholder="Era uma vez...")
+    else:
+        enviado = st.file_uploader("Envie um PDF com texto (PDFs escaneados não são suportados)", type="pdf")
 
     # Sem "disabled": o text_area só envia o valor ao perder o foco, então um botão
     # desabilitado engoliria o primeiro clique logo após digitar.
     if st.button("Corrigir texto", type="primary"):
-        if not texto.strip():
+        if modo == "Enviar PDF" and enviado is None:
+            st.warning("Envie um arquivo PDF para corrigir.")
+        elif modo == "Colar texto" and not texto.strip():
             st.warning("Digite ou cole um texto para corrigir.")
         else:
-            with st.spinner("Revisando o texto... (a primeira correção demora mais: o LanguageTool está iniciando)"):
+            with st.spinner(
+                "Revisando o texto... (a primeira correção demora mais: o LanguageTool está iniciando;"
+                " textos longos podem levar alguns minutos)"
+            ):
+                arquivo = ""
                 try:
+                    if modo == "Enviar PDF":
+                        arquivo = enviado.name
+                        texto = extrair_texto(enviado.getvalue())
                     resultado = corrigir(texto)
                 except ErroCorrecao as e:
                     st.error(str(e))
                 else:
-                    registro_id = db.salvar(texto, resultado.texto_corrigido, resultado.correcoes, resultado.observacoes)
+                    registro_id = db.salvar(
+                        texto, resultado.texto_corrigido, resultado.correcoes, resultado.observacoes, arquivo
+                    )
                     st.session_state["ultimo_id"] = registro_id
 
     ultimo = db.obter(st.session_state["ultimo_id"]) if "ultimo_id" in st.session_state else None
@@ -115,7 +142,8 @@ with aba_historico:
     for r in registros:
         previa = r["texto_original"][:80].replace("\n", " ")
         aceitas = sum(c["aceita"] for c in r["correcoes"])
-        with st.expander(f"{r['data']} · {aceitas} correções · {previa}…"):
+        origem = f"📄 {r['arquivo']} · " if r["arquivo"] else ""
+        with st.expander(f"{r['data']} · {origem}{aceitas} correções · {previa}…"):
             if st.button("Excluir", key=f"excluir_{r['id']}"):
                 db.excluir(r["id"])
                 st.rerun()

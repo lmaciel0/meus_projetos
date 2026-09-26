@@ -22,17 +22,25 @@ def inicializar() -> None:
                 texto_original  TEXT NOT NULL,
                 texto_corrigido TEXT NOT NULL,
                 correcoes       TEXT NOT NULL,
-                observacoes     TEXT NOT NULL DEFAULT ''
+                observacoes     TEXT NOT NULL DEFAULT '',
+                arquivo         TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        # Bancos criados antes da entrada por PDF não têm a coluna "arquivo".
+        colunas = {linha["name"] for linha in conn.execute("PRAGMA table_info(historico)")}
+        if "arquivo" not in colunas:
+            conn.execute("ALTER TABLE historico ADD COLUMN arquivo TEXT NOT NULL DEFAULT ''")
 
 
-def salvar(texto_original: str, texto_corrigido: str, correcoes: list[dict], observacoes: str) -> int:
+def salvar(
+    texto_original: str, texto_corrigido: str, correcoes: list[dict], observacoes: str, arquivo: str = ""
+) -> int:
     with closing(_conectar()) as conn, conn:
         cur = conn.execute(
-            "INSERT INTO historico (texto_original, texto_corrigido, correcoes, observacoes) VALUES (?, ?, ?, ?)",
-            (texto_original, texto_corrigido, json.dumps(correcoes, ensure_ascii=False), observacoes),
+            "INSERT INTO historico (texto_original, texto_corrigido, correcoes, observacoes, arquivo)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (texto_original, texto_corrigido, json.dumps(correcoes, ensure_ascii=False), observacoes, arquivo),
         )
         return cur.lastrowid
 
