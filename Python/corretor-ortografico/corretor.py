@@ -1,3 +1,4 @@
+import re
 import threading
 from dataclasses import dataclass, field
 
@@ -13,6 +14,8 @@ TIPOS_ESTILO = {"style", "register", "locale-violation"}
 # que é confiável); algumas o LanguageTool classifica em outras categorias.
 CATEGORIAS_SUGESTAO = {"GRAMMAR"}
 REGRAS_SUGESTAO = {"HAVIAM_MUITAS_BR", "CONFUSÃO_MEIA_MEIO_ADJETIVO"}
+
+MOTIVO_FIXA = "Correção fixa do seu dicionário"
 
 
 class ErroCorrecao(Exception):
@@ -101,7 +104,37 @@ def aplicar(texto: str, correcoes: list[dict]) -> str:
     return texto
 
 
-def corrigir(texto: str) -> Resultado:
+def _correcoes_fixas(texto: str, fixas: dict[str, str]) -> list[dict]:
+    """Correções do dicionário pessoal ("tava" → "estava"), só em palavras inteiras."""
+    encontradas = []
+    for original, corrigido in fixas.items():
+        for achado in re.finditer(rf"(?<!\w){re.escape(original)}(?!\w)", texto, re.IGNORECASE):
+            trecho = achado.group()
+            # "Tava" no início da frase vira "Estava".
+            substituto = corrigido[:1].upper() + corrigido[1:] if trecho[:1].isupper() else corrigido
+            if substituto != trecho:
+                encontradas.append(
+                    {
+                        "offset": achado.start(),
+                        "tamanho": len(trecho),
+                        "original": trecho,
+                        "corrigido": substituto,
+                        "motivo": MOTIVO_FIXA,
+                        "tipo": "automatica",
+                        "aceita": True,
+                    }
+                )
+    # Entradas que se sobrepõem ("tava" e "tava bem"): fica a primeira no texto.
+    resultado, fim_anterior = [], 0
+    for c in sorted(encontradas, key=lambda c: (c["offset"], -c["tamanho"])):
+        if c["offset"] >= fim_anterior:
+            resultado.append(c)
+            fim_anterior = c["offset"] + c["tamanho"]
+    return resultado
+
+
+def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str] | None = None) -> Resultado:
+    """Revisa o texto. `ignoradas` e as chaves de `fixas` vêm do dicionário pessoal, em minúsculas."""
     try:
         matches = _get_tool().check(texto)
     except ErroCorrecao:
@@ -109,10 +142,15 @@ def corrigir(texto: str) -> Resultado:
     except Exception as e:
         raise ErroCorrecao(f"Erro ao verificar o texto: {e}") from e
 
-    correcoes, observacoes, fim_anterior = [], [], 0
+    correcoes = _correcoes_fixas(texto, fixas or {})
+    faixas_fixas = [(c["offset"], c["offset"] + c["tamanho"]) for c in correcoes]
+    observacoes, fim_anterior = [], 0
     for m in sorted(matches, key=lambda m: m.offset):
         trecho = texto[m.offset : m.offset + m.error_length]
-        if _e_atribuicao_de_dialogo(texto, m):
+        if _e_atribuicao_de_dialogo(texto, m) or trecho.lower() in ignoradas:
+            continue
+        # O dicionário pessoal tem prioridade sobre o que o LanguageTool marcou no mesmo trecho.
+        if any(m.offset < fim and inicio < m.offset + m.error_length for inicio, fim in faixas_fixas):
             continue
         corrigido = _sugestao(trecho, m)
         # Correções sobrepostas não podem ser aplicadas juntas; fica a primeira e
@@ -140,6 +178,7 @@ def corrigir(texto: str) -> Resultado:
             }
         )
 
+    correcoes.sort(key=lambda c: c["offset"])
     return Resultado(
         texto_corrigido=aplicar(texto, correcoes),
         correcoes=correcoes,
