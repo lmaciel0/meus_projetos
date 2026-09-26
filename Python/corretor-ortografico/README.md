@@ -2,8 +2,8 @@
 
 Sistema local e gratuito de revisão de textos de ficção em português do Brasil, usando LanguageTool, Streamlit e SQLite. Funciona offline e não usa nenhuma API paga.
 
-- **Aplicado automaticamente:** ortografia, acentuação, pontuação, crase e maiúsculas.
-- **Sugestão com checkbox:** concordância verbal e nominal. O LanguageTool erra com mais frequência nesses casos, então cada uma só entra no texto se você marcar. A escolha fica salva no histórico.
+- **Aplicado automaticamente:** ortografia, acentuação, pontuação, crase e maiúsculas. Palavras grudadas ("noslençois") são separadas e corrigidas ("nos lençóis").
+- **Sugestão com checkbox:** concordância verbal e nominal, e correções de ortografia muito diferentes da palavra original (mais de 2 letras, sem contar acentos). O LanguageTool erra com mais frequência nesses casos, então cada uma só entra no texto se você marcar. A escolha fica salva no histórico. Quando não dá para saber se a palavra tem um erro de digitação ou está grudada na seguinte ("decasa": "década" ou "de casa"?), você escolhe entre as opções.
 - **Só observação:** sugestões de estilo (coloquialismos, abreviações, repetições) nunca são aplicadas, para preservar a voz do autor.
 
 ## Dicionário pessoal

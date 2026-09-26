@@ -50,9 +50,24 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
 
     mudou = False
     if sugestoes and editavel:
-        st.subheader(f"Sugestões de concordância ({len(sugestoes)})")
-        st.caption("Não são aplicadas automaticamente. Marque as que quiser aceitar.")
+        st.subheader(f"Sugestões para conferir ({len(sugestoes)})")
+        st.caption("Não são aplicadas automaticamente. Marque ou escolha as que quiser aceitar.")
         for i, c in enumerate(sugestoes):
+            if c.get("opcoes"):
+                manter = f"manter “{c['original']}”"
+                opcoes = [manter, *c["opcoes"]]
+                escolha = st.radio(
+                    f"“{c['original']}” — {c['motivo']}",
+                    opcoes,
+                    index=opcoes.index(c["corrigido"]) if c["aceita"] else 0,
+                    horizontal=True,
+                    key=f"sug_{rid}_{i}",
+                )
+                aceita = escolha != manter
+                corrigido = escolha if aceita else c["corrigido"]
+                mudou |= aceita != c["aceita"] or corrigido != c["corrigido"]
+                c["aceita"], c["corrigido"] = aceita, corrigido
+                continue
             aceita = st.checkbox(
                 f"“{c['original']}” → “{c['corrigido']}” — {c['motivo']}",
                 value=c["aceita"],
@@ -61,13 +76,13 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
             mudou |= aceita != c["aceita"]
             c["aceita"] = aceita
     elif sugestoes:
-        st.subheader(f"Sugestões de concordância ({len(sugestoes)})")
+        st.subheader(f"Sugestões para conferir ({len(sugestoes)})")
         st.dataframe(
             [
                 {
                     "Status": "✅ aceita" if c["aceita"] else "❌ recusada",
                     "Original": c["original"],
-                    "Sugestão": c["corrigido"],
+                    "Sugestão": " / ".join(c["opcoes"]) if c.get("opcoes") and not c["aceita"] else c["corrigido"],
                     "Motivo": c["motivo"],
                 }
                 for c in sugestoes
