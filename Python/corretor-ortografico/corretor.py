@@ -1,5 +1,7 @@
+import bisect
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 
 import language_tool_python
@@ -16,6 +18,18 @@ CATEGORIAS_SUGESTAO = {"GRAMMAR"}
 REGRAS_SUGESTAO = {"HAVIAM_MUITAS_BR", "CONFUSÃO_MEIA_MEIO_ADJETIVO"}
 
 MOTIVO_FIXA = "Correção fixa do seu dicionário"
+
+# Sugestões com mais letras diferentes que isso (sem contar acentos) quase sempre estão
+# erradas ("noslençois" → "moquencos", "Rhyssa" → "Chica"): viram checkbox, não são aplicadas.
+DISTANCIA_MAXIMA_AUTOMATICA = 2
+
+# Palavras curtas que costumam grudar na seguinte ao digitar ("decasa", "comfome", "foiuma").
+# Sem as de uma letra ("a", "o", "é"): o LanguageTool sugere separações absurdas com elas ("a pra").
+PALAVRAS_DE_LIGACAO = {
+    "as", "os", "um", "uma", "uns", "umas", "de", "da", "do", "das", "dos", "em", "na", "no",
+    "nas", "nos", "num", "numa", "ao", "aos", "com", "sem", "por", "pra", "pro", "para", "que", "se",
+    "me", "te", "lhe", "eu", "ele", "ela", "meu", "minha", "seu", "sua", "foi", "era", "já", "não",
+}
 
 
 class ErroCorrecao(Exception):
@@ -55,6 +69,83 @@ def _e_atribuicao_de_dialogo(texto: str, match) -> bool:
     antes = texto[: match.offset].rstrip()
     inicio_linha = texto.rfind("\n", 0, match.offset) + 1
     return antes.endswith(("?", "!")) and any(t in texto[inicio_linha : match.offset] for t in ("—", "–"))
+
+
+def _sem_acento(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto.lower()) if not unicodedata.combining(c))
+
+
+def _distancia(a: str, b: str) -> int:
+    """Letras inseridas, removidas, trocadas ou invertidas ("ev" → "ve" conta 1), ignorando acentos."""
+    a, b = _sem_acento(a), _sem_acento(b)
+    anterior2, anterior = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        atual = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            atual[j] = min(anterior[j] + 1, atual[j - 1] + 1, anterior[j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                atual[j] = min(atual[j], anterior2[j - 2] + 1)
+        anterior2, anterior = anterior, atual
+    return anterior[-1]
+
+
+def _pode_estar_grudada(trecho: str, match) -> bool:
+    """Palavra que o corretor ortográfico não soube corrigir bem: talvez sejam duas sem espaço."""
+    if not match.rule_id.startswith("MORFOLOGIK") or len(trecho) < 4 or not trecho.isalpha():
+        return False
+    if not match.replacements:
+        return True
+    return _distancia(trecho, _escolher(trecho, match.replacements)) > DISTANCIA_MAXIMA_AUTOMATICA
+
+
+def _separar_grudadas(trechos: set[str]) -> dict[str, str]:
+    """Tenta "noslençois" → "nos lençóis": separa em cada posição e pergunta ao LanguageTool.
+
+    As duas partes precisam ser palavras válidas; na segunda só se aceita corrigir acento.
+    Aceitar mais que isso inventa frases ("momentum" → "mome num"). Todas as tentativas
+    vão numa única verificação, uma por linha.
+    """
+    tentativas = [(t, t[:i], t[i:]) for t in sorted(trechos) for i in range(1, len(t))]
+    inicios, posicao = [], 0
+    for _, esquerda, direita in tentativas:
+        inicios.append(posicao)
+        posicao += len(esquerda) + len(direita) + 2  # espaço entre as partes e "\n"
+    texto = "\n".join(f"{esquerda} {direita}" for _, esquerda, direita in tentativas)
+
+    erros = [[] for _ in tentativas]
+    for m in _get_tool().check(texto):
+        if m.rule_id.startswith("MORFOLOGIK"):
+            erros[bisect.bisect_right(inicios, m.offset) - 1].append(m)
+
+    separadas: dict[str, str] = {}
+    for (trecho, esquerda, direita), inicio, ms in zip(tentativas, inicios, erros):
+        if trecho in separadas:
+            continue
+        if not ms:
+            segunda = direita
+        elif len(ms) == 1 and ms[0].offset == inicio + len(esquerda) + 1 and ms[0].error_length == len(direita):
+            segunda = _sugestao(direita, ms[0])
+            if segunda is None or " " in segunda or _distancia(direita, segunda) > 0:
+                continue
+        else:
+            continue
+        separadas[trecho] = f"{esquerda} {segunda}"
+    return separadas
+
+
+def _versao_com_espaco(trecho: str, replacements: list[str]) -> str | None:
+    """A sugestão que só insere um espaço ("decasa" → "de casa"), se for plausível.
+
+    O LanguageTool acrescenta separações absurdas a muitas palavras ("tempera tira",
+    "quero d", "la bios"). As que valem a dúvida começam com uma palavra de ligação.
+    """
+    if " " in trecho:
+        return None
+    for r in replacements:
+        primeira, _, segunda = r.partition(" ")
+        if r.replace(" ", "").lower() == trecho.lower() and primeira.lower() in PALAVRAS_DE_LIGACAO and len(segunda) > 1:
+            return r
+    return None
 
 
 def _escolher(trecho: str, replacements: list[str]) -> str:
@@ -137,6 +228,13 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
     """Revisa o texto. `ignoradas` e as chaves de `fixas` vêm do dicionário pessoal, em minúsculas."""
     try:
         matches = _get_tool().check(texto)
+        grudadas = {
+            trecho
+            for m in matches
+            if _pode_estar_grudada(trecho := texto[m.offset : m.offset + m.error_length], m)
+            and trecho.lower() not in ignoradas
+        }
+        separadas = _separar_grudadas(grudadas) if grudadas else {}
     except ErroCorrecao:
         raise
     except Exception as e:
@@ -152,7 +250,8 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
         # O dicionário pessoal tem prioridade sobre o que o LanguageTool marcou no mesmo trecho.
         if any(m.offset < fim and inicio < m.offset + m.error_length for inicio, fim in faixas_fixas):
             continue
-        corrigido = _sugestao(trecho, m)
+        separada = separadas.get(trecho)
+        corrigido = separada or _sugestao(trecho, m)
         # Correções sobrepostas não podem ser aplicadas juntas; fica a primeira e
         # as demais viram observação em vez de sumirem.
         if _e_estilo(m) or corrigido is None or m.offset < fim_anterior:
@@ -161,22 +260,38 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
             continue
         fim_anterior = m.offset + m.error_length
 
-        motivo = m.message
-        alternativas = [r for r in m.replacements if r.lower() != corrigido.lower()][:2]
-        if alternativas:
-            motivo += f" (alternativas: {', '.join(alternativas)})"
-        automatica = not _e_sugestao(m)
-        correcoes.append(
-            {
-                "offset": m.offset,
-                "tamanho": m.error_length,
-                "original": trecho,
-                "corrigido": corrigido,
-                "motivo": motivo,
-                "tipo": "automatica" if automatica else "sugestao",
-                "aceita": automatica,
-            }
-        )
+        if separada:
+            motivo, automatica = "Palavras grudadas: faltava um espaço.", True
+        else:
+            motivo = m.message
+            alternativas = [r for r in m.replacements if r.lower() != corrigido.lower()][:2]
+            if alternativas:
+                motivo += f" (alternativas: {', '.join(alternativas)})"
+            automatica = not _e_sugestao(m)
+            if automatica and _distancia(trecho, corrigido) > DISTANCIA_MAXIMA_AUTOMATICA:
+                motivo += " Sugestão muito diferente do original: confira antes de aceitar."
+                automatica = False
+        correcao = {
+            "offset": m.offset,
+            "tamanho": m.error_length,
+            "original": trecho,
+            "corrigido": corrigido,
+            "motivo": motivo,
+            "tipo": "automatica" if automatica else "sugestao",
+            "aceita": automatica,
+        }
+        # "decasa" → "década" ou "de casa"? O LanguageTool põe a versão com espaço no fim
+        # da lista e só o contexto diz qual é a certa: o autor escolhe.
+        com_espaco = None if separada else _versao_com_espaco(trecho, m.replacements)
+        # Correção só de acento ("labios" → "lábios") não deixa dúvida.
+        if com_espaco and com_espaco.lower() != corrigido.lower() and _distancia(trecho, corrigido) > 0:
+            correcao.update(
+                motivo="Pode ser erro de digitação ou palavras grudadas: escolha a certa.",
+                tipo="sugestao",
+                aceita=False,
+                opcoes=[corrigido, com_espaco],
+            )
+        correcoes.append(correcao)
 
     correcoes.sort(key=lambda c: c["offset"])
     return Resultado(
