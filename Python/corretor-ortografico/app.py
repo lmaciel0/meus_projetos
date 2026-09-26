@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit as st
 
 import db
-from corretor import ErroCorrecao, aplicar, corrigir
+from corretor import MOTIVO_FIXA, ErroCorrecao, aplicar, corrigir
 from pdf import extrair_texto
 
 st.set_page_config(page_title="Corretor de Textos", page_icon="✍️", layout="wide")
@@ -13,7 +13,8 @@ db.inicializar()
 def exibir_resultado(registro: dict, editavel: bool) -> None:
     rid, original, correcoes = registro["id"], registro["texto_original"], registro["correcoes"]
     chave = f"{'edit' if editavel else 'hist'}_{rid}"
-    automaticas = [c for c in correcoes if c["tipo"] == "automatica"]
+    # Automáticas recusadas são as que o autor mandou para o dicionário pessoal.
+    automaticas = [c for c in correcoes if c["tipo"] == "automatica" and c["aceita"]]
     sugestoes = [c for c in correcoes if c["tipo"] == "sugestao"]
 
     # Os textos ficam no topo, mas dependem dos checkboxes renderizados abaixo.
@@ -26,6 +27,24 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
             width="stretch",
             hide_index=True,
         )
+        if editavel:
+            with st.expander("Alguma dessas palavras está certa? (nomes, gírias, termos da história)"):
+                escolhidas = st.multiselect(
+                    "Não corrigir mais",
+                    # Correções fixas são desligadas na aba Dicionário, não aqui.
+                    sorted({c["original"] for c in automaticas if c["motivo"] != MOTIVO_FIXA}),
+                    key=f"ignorar_{rid}",
+                    help="Vão para o dicionário pessoal e a correção é desfeita neste texto.",
+                )
+                if st.button("Adicionar ao dicionário pessoal", key=f"btn_ignorar_{rid}", disabled=not escolhidas):
+                    for palavra in escolhidas:
+                        db.adicionar_ignorada(palavra)
+                    minusculas = {p.lower() for p in escolhidas}
+                    for c in correcoes:
+                        if c["tipo"] == "automatica" and c["original"].lower() in minusculas:
+                            c["aceita"] = False
+                    db.atualizar(rid, aplicar(original, correcoes), correcoes)
+                    st.rerun()
     else:
         st.success("Nenhuma correção ortográfica necessária.")
 
@@ -94,7 +113,7 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
 st.title("✍️ Corretor de Textos")
 st.caption("Revisão ortográfica e gramatical preservando o estilo do autor · LanguageTool (offline, gratuito)")
 
-aba_corrigir, aba_historico = st.tabs(["Corrigir", "Histórico"])
+aba_corrigir, aba_historico, aba_dicionario = st.tabs(["Corrigir", "Histórico", "Dicionário"])
 
 with aba_corrigir:
     modo = st.radio("Entrada", ["Colar texto", "Enviar PDF"], horizontal=True, label_visibility="collapsed")
@@ -120,7 +139,7 @@ with aba_corrigir:
                     if modo == "Enviar PDF":
                         arquivo = enviado.name
                         texto = extrair_texto(enviado.getvalue())
-                    resultado = corrigir(texto)
+                    resultado = corrigir(texto, set(db.listar_ignoradas()), db.listar_fixas())
                 except ErroCorrecao as e:
                     st.error(str(e))
                 else:
@@ -148,3 +167,39 @@ with aba_historico:
                 db.excluir(r["id"])
                 st.rerun()
             exibir_resultado(r, editavel=False)
+
+with aba_dicionario:
+    st.caption("Ajustes que valem para as próximas correções. Maiúsculas e minúsculas são ignoradas.")
+    col_ignoradas, col_fixas = st.columns(2)
+
+    with col_ignoradas:
+        st.subheader("Palavras aceitas")
+        st.caption("Nunca são corrigidas: nomes de personagens, lugares, gírias, termos da história.")
+        with st.form("form_ignorada", clear_on_submit=True):
+            nova = st.text_input("Palavra ou trecho", placeholder="Aelin")
+            if st.form_submit_button("Adicionar") and nova.strip():
+                db.adicionar_ignorada(nova)
+                st.rerun()
+        for palavra in db.listar_ignoradas():
+            col_palavra, col_remover = st.columns([5, 1])
+            col_palavra.write(palavra)
+            if col_remover.button("Remover", key=f"rem_ign_{palavra}"):
+                db.remover_ignorada(palavra)
+                st.rerun()
+
+    with col_fixas:
+        st.subheader("Correções fixas")
+        st.caption("Sempre aplicadas, mesmo quando o LanguageTool não marca nada, e com prioridade sobre ele.")
+        with st.form("form_fixa", clear_on_submit=True):
+            col_de, col_para = st.columns(2)
+            de = col_de.text_input("Quando aparecer", placeholder="tava")
+            para = col_para.text_input("Trocar por", placeholder="estava")
+            if st.form_submit_button("Adicionar") and de.strip() and para.strip():
+                db.adicionar_fixa(de, para)
+                st.rerun()
+        for de, para in db.listar_fixas().items():
+            col_regra, col_remover = st.columns([5, 1])
+            col_regra.write(f"{de} → {para}")
+            if col_remover.button("Remover", key=f"rem_fixa_{de}"):
+                db.remover_fixa(de)
+                st.rerun()

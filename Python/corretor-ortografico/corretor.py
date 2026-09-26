@@ -15,6 +15,8 @@ TIPOS_ESTILO = {"style", "register", "locale-violation"}
 CATEGORIAS_SUGESTAO = {"GRAMMAR"}
 REGRAS_SUGESTAO = {"HAVIAM_MUITAS_BR", "CONFUSÃO_MEIA_MEIO_ADJETIVO"}
 
+MOTIVO_FIXA = "Correção fixa do seu dicionário"
+
 
 class ErroCorrecao(Exception):
     """Erro com mensagem amigável para exibir na interface."""
@@ -117,7 +119,7 @@ def _correcoes_fixas(texto: str, fixas: dict[str, str]) -> list[dict]:
                         "tamanho": len(trecho),
                         "original": trecho,
                         "corrigido": substituto,
-                        "motivo": "Correção fixa do seu dicionário",
+                        "motivo": MOTIVO_FIXA,
                         "tipo": "automatica",
                         "aceita": True,
                     }
