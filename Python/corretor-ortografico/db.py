@@ -31,6 +31,9 @@ def inicializar() -> None:
         colunas = {linha["name"] for linha in conn.execute("PRAGMA table_info(historico)")}
         if "arquivo" not in colunas:
             conn.execute("ALTER TABLE historico ADD COLUMN arquivo TEXT NOT NULL DEFAULT ''")
+        # Dicionário pessoal: guardado em minúsculas, a comparação ignora maiúsculas.
+        conn.execute("CREATE TABLE IF NOT EXISTS palavras_ignoradas (palavra TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE IF NOT EXISTS correcoes_fixas (original TEXT PRIMARY KEY, corrigido TEXT NOT NULL)")
 
 
 def salvar(
@@ -77,3 +80,37 @@ def atualizar(registro_id: int, texto_corrigido: str, correcoes: list[dict]) -> 
             "UPDATE historico SET texto_corrigido = ?, correcoes = ? WHERE id = ?",
             (texto_corrigido, json.dumps(correcoes, ensure_ascii=False), registro_id),
         )
+
+
+def listar_ignoradas() -> list[str]:
+    with closing(_conectar()) as conn:
+        return [l["palavra"] for l in conn.execute("SELECT palavra FROM palavras_ignoradas ORDER BY palavra")]
+
+
+def adicionar_ignorada(palavra: str) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute("INSERT OR IGNORE INTO palavras_ignoradas (palavra) VALUES (?)", (palavra.strip().lower(),))
+
+
+def remover_ignorada(palavra: str) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute("DELETE FROM palavras_ignoradas WHERE palavra = ?", (palavra,))
+
+
+def listar_fixas() -> dict[str, str]:
+    with closing(_conectar()) as conn:
+        linhas = conn.execute("SELECT original, corrigido FROM correcoes_fixas ORDER BY original")
+        return {l["original"]: l["corrigido"] for l in linhas}
+
+
+def adicionar_fixa(original: str, corrigido: str) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO correcoes_fixas (original, corrigido) VALUES (?, ?)",
+            (original.strip().lower(), corrigido.strip()),
+        )
+
+
+def remover_fixa(original: str) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute("DELETE FROM correcoes_fixas WHERE original = ?", (original,))
