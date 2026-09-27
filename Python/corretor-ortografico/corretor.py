@@ -2,9 +2,12 @@ import bisect
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
 import language_tool_python
+
+import analise
 
 # Categorias do LanguageTool que são sugestões de estilo/registro, não erros.
 # Para texto de ficção elas não são aplicadas: viram apenas observações.
@@ -18,6 +21,13 @@ CATEGORIAS_SUGESTAO = {"GRAMMAR"}
 REGRAS_SUGESTAO = {"HAVIAM_MUITAS_BR", "CONFUSÃO_MEIA_MEIO_ADJETIVO"}
 
 MOTIVO_FIXA = "Correção fixa do seu dicionário"
+MOTIVO_DIALOGO = "Diálogo: fala marcada com hífen em vez de travessão."
+REGRA_DIALOGO = "TRAVESSAO_DIALOGO"
+
+# Textos longos vão ao LanguageTool em blocos de parágrafos, para mostrar o progresso
+# e reaproveitar os parágrafos já verificados quando o texto é corrigido de novo.
+TAMANHO_BLOCO = 4000
+LIMITE_CACHE = 20000
 
 # Sugestões com mais letras diferentes que isso (sem contar acentos) quase sempre estão
 # erradas ("noslençois" → "moquencos", "Rhyssa" → "Chica"): viram checkbox, não são aplicadas.
@@ -42,13 +52,36 @@ class Resultado:
     # Cada correção: offset, tamanho, original, corrigido, motivo,
     # tipo ("automatica" ou "sugestao") e aceita (bool).
     correcoes: list[dict] = field(default_factory=list)
-    observacoes: str = ""
+    # Cada observação: trecho, mensagem, sugestao (ou None), offset, tamanho, regra e
+    # tipo ("estilo", "repeticao", "consistencia" ou "outra").
+    observacoes: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Achado:
+    """Cópia do que interessa de um Match do LanguageTool, com offset ajustável."""
+
+    offset: int
+    error_length: int
+    replacements: list[str]
+    message: str
+    rule_id: str
+    category: str
+    rule_issue_type: str
 
 
 _tool: language_tool_python.LanguageTool | None = None
 # O Streamlit roda cada sessão numa thread: sem a trava, dois cliques simultâneos
 # na primeira correção iniciariam dois servidores Java.
 _tool_lock = threading.Lock()
+
+# Parágrafo → achados com offset relativo ao parágrafo.
+_cache: dict[str, tuple[_Achado, ...]] = {}
+_cache_lock = threading.Lock()
+
+# Fim de parágrafo: linha em branco, ou quebra de linha logo depois de pontuação final
+# (a frase terminou, então o LanguageTool não perde contexto ao verificar separado).
+_FIM_DE_PARAGRAFO = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)*|(?<=[.!?…\"”»])\n")
 
 
 def _get_tool() -> language_tool_python.LanguageTool:
@@ -62,13 +95,99 @@ def _get_tool() -> language_tool_python.LanguageTool:
         return _tool
 
 
+def _paragrafos(texto: str) -> list[tuple[int, str]]:
+    """Parágrafos não vazios do texto, com a posição onde cada um começa."""
+    paragrafos, inicio = [], 0
+    for fim in _FIM_DE_PARAGRAFO.finditer(texto):
+        paragrafos.append((inicio, texto[inicio : fim.start()]))
+        inicio = fim.end()
+    paragrafos.append((inicio, texto[inicio:]))
+    return [(i, p) for i, p in paragrafos if p.strip()]
+
+
+def _verificar(texto: str, progresso: Callable[[int, int], None] | None = None) -> list[_Achado]:
+    """Verifica o texto com o LanguageTool em blocos, reaproveitando parágrafos já verificados."""
+    paragrafos = _paragrafos(texto)
+    conhecidos = {p: _cache[p] for _, p in paragrafos if p in _cache}
+    novos = list(dict.fromkeys(p for _, p in paragrafos if p not in conhecidos))
+
+    blocos, atual = [], []
+    for p in novos:
+        if atual and sum(len(x) + 2 for x in atual) + len(p) > TAMANHO_BLOCO:
+            blocos.append(atual)
+            atual = []
+        atual.append(p)
+    if atual:
+        blocos.append(atual)
+
+    for n, bloco in enumerate(blocos, start=1):
+        inicios, posicao = [], 0
+        for p in bloco:
+            inicios.append(posicao)
+            posicao += len(p) + 2
+        achados = [[] for _ in bloco]
+        for m in _get_tool().check("\n\n".join(bloco)):
+            k = bisect.bisect_right(inicios, m.offset) - 1
+            relativo = m.offset - inicios[k]
+            # Um erro que atravessa o separador entre parágrafos não existe no texto original.
+            if relativo + m.error_length <= len(bloco[k]):
+                achados[k].append(
+                    _Achado(
+                        relativo,
+                        m.error_length,
+                        list(m.replacements),
+                        m.message,
+                        m.rule_id,
+                        m.category,
+                        m.rule_issue_type,
+                    )
+                )
+        for p, a in zip(bloco, achados):
+            conhecidos[p] = tuple(a)
+        with _cache_lock:
+            if len(_cache) > LIMITE_CACHE:
+                _cache.clear()
+            _cache.update(zip(bloco, map(tuple, achados)))
+        if progresso:
+            progresso(n, len(blocos))
+
+    return [replace(a, offset=a.offset + inicio) for inicio, p in paragrafos for a in conhecidos[p]]
+
+
 def _e_atribuicao_de_dialogo(texto: str, match) -> bool:
     """'— Vem? perguntou ele' — em diálogo, o verbo após ?/! fica minúsculo."""
     if match.rule_id != "UPPERCASE_SENTENCE_START":
         return False
     antes = texto[: match.offset].rstrip()
     inicio_linha = texto.rfind("\n", 0, match.offset) + 1
-    return antes.endswith(("?", "!")) and any(t in texto[inicio_linha : match.offset] for t in ("—", "–"))
+    linha = texto[inicio_linha : match.offset]
+    # Falas marcadas com hífen também contam: o hífen vira travessão na correção.
+    return antes.endswith(("?", "!")) and (any(t in linha for t in ("—", "–")) or linha.lstrip().startswith("-"))
+
+
+def _dialogos(texto: str) -> list[dict]:
+    """ "- Vem? -- perguntou ele." → "— Vem? — perguntou ele.": travessão nas falas."""
+    correcoes = []
+    for linha in re.finditer(r"^[ \t]*(--?)(?!-)(.*)$", texto, re.MULTILINE):
+        # "-Vem" ganha o espaço depois do travessão, como no padrão brasileiro.
+        substituto = "—" if linha.group(2)[:1] in (" ", "\t", "") else "— "
+        trocas = [(linha.start(1), linha.group(1), substituto)]
+        for meio in re.finditer(r"(?<= )--?(?= )", linha.group(2)):
+            trocas.append((linha.start(2) + meio.start(), meio.group(), "—"))
+        for offset, original, corrigido in trocas:
+            correcoes.append(
+                {
+                    "offset": offset,
+                    "tamanho": len(original),
+                    "original": original,
+                    "corrigido": corrigido,
+                    "motivo": MOTIVO_DIALOGO,
+                    "regra": REGRA_DIALOGO,
+                    "tipo": "automatica",
+                    "aceita": True,
+                }
+            )
+    return correcoes
 
 
 def _sem_acento(texto: str) -> str:
@@ -201,8 +320,13 @@ def _correcoes_fixas(texto: str, fixas: dict[str, str]) -> list[dict]:
     for original, corrigido in fixas.items():
         for achado in re.finditer(rf"(?<!\w){re.escape(original)}(?!\w)", texto, re.IGNORECASE):
             trecho = achado.group()
-            # "Tava" no início da frase vira "Estava".
-            substituto = corrigido[:1].upper() + corrigido[1:] if trecho[:1].isupper() else corrigido
+            # "Tava" no início da frase vira "Estava"; "TAVA", "ESTAVA".
+            if len(trecho) > 1 and trecho.isupper():
+                substituto = corrigido.upper()
+            elif trecho[:1].isupper():
+                substituto = corrigido[:1].upper() + corrigido[1:]
+            else:
+                substituto = corrigido
             if substituto != trecho:
                 encontradas.append(
                     {
@@ -224,10 +348,33 @@ def _correcoes_fixas(texto: str, fixas: dict[str, str]) -> list[dict]:
     return resultado
 
 
-def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str] | None = None) -> Resultado:
-    """Revisa o texto. `ignoradas` e as chaves de `fixas` vêm do dicionário pessoal, em minúsculas."""
+def _observacao(trecho: str, m, tipo: str) -> dict:
+    return {
+        "trecho": trecho,
+        "mensagem": m.message,
+        "sugestao": m.replacements[0] if m.replacements else None,
+        "offset": m.offset,
+        "tamanho": m.error_length,
+        "regra": m.rule_id,
+        "tipo": tipo,
+    }
+
+
+def corrigir(
+    texto: str,
+    ignoradas: set[str] = frozenset(),
+    fixas: dict[str, str] | None = None,
+    regras_desligadas: set[str] = frozenset(),
+    progresso: Callable[[int, int], None] | None = None,
+) -> Resultado:
+    """Revisa o texto.
+
+    `ignoradas` e as chaves de `fixas` vêm do dicionário pessoal, em minúsculas.
+    `regras_desligadas` são os avisos que o autor silenciou (ids de regra).
+    `progresso(feitos, total)` é chamado a cada bloco verificado.
+    """
     try:
-        matches = _get_tool().check(texto)
+        matches = [m for m in _verificar(texto, progresso) if m.rule_id not in regras_desligadas]
         grudadas = {
             trecho
             for m in matches
@@ -241,22 +388,23 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
         raise ErroCorrecao(f"Erro ao verificar o texto: {e}") from e
 
     correcoes = _correcoes_fixas(texto, fixas or {})
-    faixas_fixas = [(c["offset"], c["offset"] + c["tamanho"]) for c in correcoes]
+    if REGRA_DIALOGO not in regras_desligadas:
+        correcoes += _dialogos(texto)
+    faixas_proprias = [(c["offset"], c["offset"] + c["tamanho"]) for c in correcoes]
     observacoes, fim_anterior = [], 0
     for m in sorted(matches, key=lambda m: m.offset):
         trecho = texto[m.offset : m.offset + m.error_length]
         if _e_atribuicao_de_dialogo(texto, m) or trecho.lower() in ignoradas:
             continue
-        # O dicionário pessoal tem prioridade sobre o que o LanguageTool marcou no mesmo trecho.
-        if any(m.offset < fim and inicio < m.offset + m.error_length for inicio, fim in faixas_fixas):
+        # O dicionário pessoal e os travessões têm prioridade sobre o LanguageTool no mesmo trecho.
+        if any(m.offset < fim and inicio < m.offset + m.error_length for inicio, fim in faixas_proprias):
             continue
         separada = separadas.get(trecho)
         corrigido = separada or _sugestao(trecho, m)
         # Correções sobrepostas não podem ser aplicadas juntas; fica a primeira e
         # as demais viram observação em vez de sumirem.
         if _e_estilo(m) or corrigido is None or m.offset < fim_anterior:
-            sugestao = f" (sugestão: “{m.replacements[0]}”)" if m.replacements else ""
-            observacoes.append(f"“{trecho}”: {m.message}{sugestao}")
+            observacoes.append(_observacao(trecho, m, "estilo" if _e_estilo(m) else "outra"))
             continue
         fim_anterior = m.offset + m.error_length
 
@@ -277,6 +425,7 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
             "original": trecho,
             "corrigido": corrigido,
             "motivo": motivo,
+            "regra": m.rule_id,
             "tipo": "automatica" if automatica else "sugestao",
             "aceita": automatica,
         }
@@ -293,9 +442,36 @@ def corrigir(texto: str, ignoradas: set[str] = frozenset(), fixas: dict[str, str
             )
         correcoes.append(correcao)
 
+    if analise.REGRA_REPETICAO not in regras_desligadas:
+        observacoes += analise.repeticoes(texto, ignoradas)
+    if analise.REGRA_NOME not in regras_desligadas:
+        desconhecidas = {
+            texto[m.offset : m.offset + m.error_length] for m in matches if m.rule_id.startswith("MORFOLOGIK")
+        }
+        observacoes += analise.nomes_parecidos(texto, ignoradas, desconhecidas)
+
     correcoes.sort(key=lambda c: c["offset"])
-    return Resultado(
-        texto_corrigido=aplicar(texto, correcoes),
-        correcoes=correcoes,
-        observacoes="\n".join(f"- {o}" for o in observacoes),
+    observacoes.sort(key=lambda o: o["offset"])
+    return Resultado(texto_corrigido=aplicar(texto, correcoes), correcoes=correcoes, observacoes=observacoes)
+
+
+def sobrepoe(item: dict, correcoes: list[dict]) -> bool:
+    """Se o trecho de uma observação coincide com alguma correção aceita."""
+    inicio, fim = item["offset"], item["offset"] + item["tamanho"]
+    return any(
+        c["aceita"] and "offset" in c and c["offset"] < fim and inicio < c["offset"] + c["tamanho"] for c in correcoes
     )
+
+
+def correcao_de_observacao(observacao: dict) -> dict:
+    """Transforma uma observação com sugestão numa correção aceita."""
+    return {
+        "offset": observacao["offset"],
+        "tamanho": observacao["tamanho"],
+        "original": observacao["trecho"],
+        "corrigido": observacao["sugestao"],
+        "motivo": observacao["mensagem"],
+        "regra": observacao.get("regra", ""),
+        "tipo": "sugestao",
+        "aceita": True,
+    }
