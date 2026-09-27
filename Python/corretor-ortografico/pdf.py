@@ -1,5 +1,11 @@
+import importlib.util
 import io
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -36,7 +42,39 @@ def normalizar(texto: str) -> str:
     return "\n\n".join(paragrafos)
 
 
-def extrair_texto(dados: bytes) -> str:
+def _comando_ocr() -> list[str] | None:
+    """OCRmyPDF, se estiver instalado (ele também precisa do Tesseract com o idioma português)."""
+    if executavel := shutil.which("ocrmypdf"):
+        return [executavel]
+    if importlib.util.find_spec("ocrmypdf"):
+        return [sys.executable, "-m", "ocrmypdf"]
+    return None
+
+
+def _ocr(dados: bytes) -> bytes | None:
+    """Reconhece o texto de um PDF escaneado. Retorna None se não houver OCR instalado."""
+    comando = _comando_ocr()
+    if comando is None:
+        return None
+    with tempfile.TemporaryDirectory() as pasta:
+        entrada, saida = Path(pasta) / "entrada.pdf", Path(pasta) / "saida.pdf"
+        entrada.write_bytes(dados)
+        try:
+            subprocess.run(
+                [*comando, "-l", "por", "--skip-text", "--output-type", "pdf", str(entrada), str(saida)],
+                check=True,
+                capture_output=True,
+                timeout=900,
+            )
+        except subprocess.CalledProcessError as e:
+            detalhe = e.stderr.decode(errors="replace").strip().splitlines()[-1:] or [""]
+            raise ErroCorrecao(f"O OCR não conseguiu ler o PDF: {detalhe[0]}") from e
+        except (subprocess.TimeoutExpired, OSError) as e:
+            raise ErroCorrecao(f"O OCR não conseguiu ler o PDF: {e}") from e
+        return saida.read_bytes()
+
+
+def _ler(dados: bytes) -> str:
     try:
         leitor = PdfReader(io.BytesIO(dados))
         if leitor.is_encrypted and not leitor.decrypt(""):
@@ -47,10 +85,21 @@ def extrair_texto(dados: bytes) -> str:
         raise
     except (PdfReadError, ValueError, OSError) as e:
         raise ErroCorrecao(f"Não foi possível ler o PDF: {e}") from e
+    return normalizar(texto)
 
-    texto = normalizar(texto)
-    if not texto:
+
+def extrair_texto(dados: bytes) -> str:
+    texto = _ler(dados)
+    if texto:
+        return texto
+    # Sem texto: provavelmente escaneado. Tenta o OCR, se houver.
+    reconhecido = _ocr(dados)
+    if reconhecido is None:
         raise ErroCorrecao(
-            "Não foi encontrado texto no PDF. Se ele for escaneado (imagem), é preciso passá-lo por OCR antes."
+            "Não foi encontrado texto no PDF. Se ele for escaneado (imagem), instale o OCRmyPDF e o"
+            " Tesseract com português para lê-lo aqui, ou passe-o por OCR antes."
         )
+    texto = _ler(reconhecido)
+    if not texto:
+        raise ErroCorrecao("Não foi encontrado texto no PDF, nem com OCR.")
     return texto
