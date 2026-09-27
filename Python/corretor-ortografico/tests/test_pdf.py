@@ -103,3 +103,29 @@ def test_pdf_com_senha_da_erro_amigavel():
 def test_arquivo_invalido_da_erro_amigavel():
     with pytest.raises(ErroCorrecao, match="ler o PDF"):
         extrair_texto(b"isto nao e um pdf")
+
+
+# --- OCR ------------------------------------------------------------------------
+
+
+def _pdf_em_branco() -> bytes:
+    escritor = PdfWriter()
+    escritor.add_blank_page(width=595, height=842)
+    buf = io.BytesIO()
+    escritor.write(buf)
+    return buf.getvalue()
+
+
+def test_pdf_escaneado_passa_pelo_ocr_quando_instalado(monkeypatch):
+    import pdf
+
+    monkeypatch.setattr(pdf, "_ocr", lambda dados: _pdf_com_texto(["Texto reconhecido."]))
+    assert extrair_texto(_pdf_em_branco()) == "Texto reconhecido."
+
+
+def test_sem_ocr_instalado_explica_como_resolver(monkeypatch):
+    import pdf
+
+    monkeypatch.setattr(pdf, "_comando_ocr", lambda: None)
+    with pytest.raises(ErroCorrecao, match="OCRmyPDF"):
+        extrair_texto(_pdf_em_branco())

@@ -54,7 +54,7 @@ def test_palavra_do_dicionario_pessoal_nao_e_corrigida_nem_observada(monkeypatch
     r = corrigir(texto, ignoradas={"aelin"})
     assert r.texto_corrigido == "Aelin olhou para Rowa."
     assert [c["original"] for c in r.correcoes] == ["Rowan"]
-    assert "Aelin" not in r.observacoes
+    assert all(o["trecho"] != "Aelin" for o in r.observacoes)
 
 
 def test_correcao_fixa_vale_mesmo_sem_o_languagetool_marcar(monkeypatch):
@@ -198,3 +198,92 @@ def test_correcao_so_de_acento_nao_gera_duvida(monkeypatch):
 def test_separacao_com_palavra_de_uma_letra_nao_gera_duvida(monkeypatch):
     _usar(monkeypatch, set(), {"apra": ["para", "a pra"]})
     assert corrigir("apra").texto_corrigido == "para"
+
+
+# --- blocos, cache e avisos silenciados --------------------------------------------
+
+
+class _LTContador(_LTFalso):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.textos = []
+
+    def check(self, texto):
+        self.textos.append(texto)
+        return super().check(texto)
+
+
+def test_texto_longo_vai_em_blocos_com_progresso_e_offsets_certos(monkeypatch):
+    lt = _LTContador({"ele", "saiu"}, {"cedu": ["cedo"]})
+    monkeypatch.setattr(corretor, "_get_tool", lambda: lt)
+    monkeypatch.setattr(corretor, "TAMANHO_BLOCO", 20)
+    texto = "\n\n".join(["Ele saiu cedu."] * 3 + ["Ele saiu."])
+    chamadas = []
+    r = corrigir(texto, progresso=lambda feitos, total: chamadas.append((feitos, total)))
+    assert r.texto_corrigido == "\n\n".join(["Ele saiu cedo."] * 3 + ["Ele saiu."])
+    # Parágrafos repetidos são verificados uma vez só; os dois distintos não cabem num bloco.
+    assert chamadas == [(1, 2), (2, 2)]
+    assert lt.textos == ["Ele saiu cedu.", "Ele saiu."]
+
+
+def test_paragrafo_ja_verificado_nao_volta_ao_languagetool(monkeypatch):
+    lt = _LTContador({"ele", "saiu", "voltou"}, {"cedu": ["cedo"]})
+    monkeypatch.setattr(corretor, "_get_tool", lambda: lt)
+    corrigir("Ele saiu cedu.")
+    r = corrigir("Ele saiu cedu.\nEle voltou.")
+    assert r.texto_corrigido == "Ele saiu cedo.\nEle voltou."
+    assert lt.textos == ["Ele saiu cedu.", "Ele voltou."]
+
+
+def test_quebra_de_linha_no_meio_da_frase_nao_separa_paragrafo():
+    assert corretor._paragrafos("Era uma\nvez.\nFim.") == [(0, "Era uma\nvez."), (13, "Fim.")]
+
+
+def test_regra_silenciada_nao_aparece(monkeypatch):
+    _usar(monkeypatch, {"ele", "sabia"}, {"nao": ["não"]})
+    r = corrigir("Ele nao sabia.", regras_desligadas={"MORFOLOGIK_RULE_PT_BR"})
+    assert r.correcoes == [] and r.observacoes == []
+
+
+# --- travessões, maiúsculas e observações -----------------------------------------
+
+
+def test_hifen_de_dialogo_vira_travessao(monkeypatch):
+    monkeypatch.setattr(corretor, "_get_tool", lambda: SimpleNamespace(check=lambda _: []))
+    texto = "Ele chegou.\n- Vem? -- perguntou ele.\n-Vou."
+    r = corrigir(texto)
+    assert r.texto_corrigido == "Ele chegou.\n— Vem? — perguntou ele.\n— Vou."
+    assert {c["motivo"] for c in r.correcoes} == {corretor.MOTIVO_DIALOGO}
+
+
+def test_hifen_no_meio_da_frase_nao_e_travessao(monkeypatch):
+    monkeypatch.setattr(corretor, "_get_tool", lambda: SimpleNamespace(check=lambda _: []))
+    texto = "Um guarda-chuva - velho.\n---"
+    assert corrigir(texto).texto_corrigido == texto
+
+
+def test_correcao_fixa_em_maiusculas(monkeypatch):
+    _lt(monkeypatch, "ELE TAVA ALI.")
+    assert corrigir("ELE TAVA ALI.", fixas={"tava": "estava"}).texto_corrigido == "ELE ESTAVA ALI."
+
+
+def test_observacoes_sao_estruturadas_e_podem_virar_correcao(monkeypatch):
+    texto = "Ele tipo sabia."
+    offset = texto.index("tipo")
+    estilo = SimpleNamespace(
+        offset=offset,
+        error_length=4,
+        replacements=["como"],
+        message="Coloquialismo.",
+        rule_id="TIPO_COLOQUIAL",
+        category="COLLOQUIALISMS",
+        rule_issue_type="style",
+    )
+    monkeypatch.setattr(corretor, "_get_tool", lambda: SimpleNamespace(check=lambda _: [estilo]))
+    r = corrigir(texto)
+    [o] = r.observacoes
+    assert (o["trecho"], o["sugestao"], o["regra"], o["tipo"]) == ("tipo", "como", "TIPO_COLOQUIAL", "estilo")
+    assert not corretor.sobrepoe(o, r.correcoes)
+    correcao = corretor.correcao_de_observacao(o)
+    assert corretor.aplicar(texto, [correcao]) == "Ele como sabia."
+    assert corretor.sobrepoe(o, [correcao])
