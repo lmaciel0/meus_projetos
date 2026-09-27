@@ -46,6 +46,11 @@ def inicializar() -> None:
         # Dicionário pessoal: guardado em minúsculas, a comparação ignora maiúsculas.
         conn.execute("CREATE TABLE IF NOT EXISTS palavras_ignoradas (palavra TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE IF NOT EXISTS correcoes_fixas (original TEXT PRIMARY KEY, corrigido TEXT NOT NULL)")
+        # Revisões da IA por parágrafo: um texto longo interrompido continua de onde parou.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cache_ia (modelo TEXT NOT NULL, paragrafo TEXT NOT NULL,"
+            " revisado TEXT NOT NULL, PRIMARY KEY (modelo, paragrafo))"
+        )
         # Avisos silenciados: id da regra e um exemplo da mensagem, para o autor reconhecer.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS regras_desligadas (regra TEXT PRIMARY KEY, descricao TEXT NOT NULL DEFAULT '')"
@@ -226,6 +231,22 @@ def sugestoes_de_fixas(minimo: int = 3) -> list[tuple[str, str, int]]:
             ):
                 contagem[(original.lower(), c["corrigido"].lower())] += 1
     return [(o, c, n) for (o, c), n in contagem.most_common() if n >= minimo]
+
+
+def ler_revisao_ia(modelo: str, paragrafo: str) -> str | None:
+    with closing(_conectar()) as conn:
+        linha = conn.execute(
+            "SELECT revisado FROM cache_ia WHERE modelo = ? AND paragrafo = ?", (modelo, paragrafo)
+        ).fetchone()
+    return linha["revisado"] if linha else None
+
+
+def gravar_revisao_ia(modelo: str, paragrafo: str, revisado: str) -> None:
+    with closing(_conectar()) as conn, conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO cache_ia (modelo, paragrafo, revisado) VALUES (?, ?, ?)",
+            (modelo, paragrafo, revisado),
+        )
 
 
 def exportar() -> dict:
