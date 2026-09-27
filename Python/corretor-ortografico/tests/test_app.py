@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 
 import corretor
 import db
+import ia
 
 APP = str(Path(__file__).parent.parent / "app.py")
 
@@ -38,10 +39,16 @@ class _LTFalso:
         return achados
 
 
+# Parágrafo → o que a "IA" devolve.
+_IA_FALSA = {"Ele nao viu a irmã.\n\nEla tipo sabia.": "Ele não viu a irmã.\n\nEla como sabia."}
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "historico.db")
     monkeypatch.setattr(corretor, "_get_tool", lambda: _LTFalso())
+    monkeypatch.setattr(ia, "disponivel", lambda: (True, "falso"))
+    monkeypatch.setattr(ia, "_chamar", lambda paragrafo, nomes: _IA_FALSA.get(paragrafo, paragrafo))
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     return at
@@ -141,3 +148,25 @@ def test_aplicar_nome_no_lugar_de_sugestao_recusada(app):
     app.run()
     assert _corrigido(app).value == "Rhyssa viu. Rhyssa viu. Rhyssa viu."
     assert db.listar()[0]["texto_corrigido"] == "Rhyssa viu. Rhyssa viu. Rhyssa viu."
+
+
+def test_revisao_com_ia_vira_sugestoes_e_aceitar_todas(app):
+    next(r for r in app.radio if r.label == "Revisar com").set_value("IA local – Gemma 4 (lenta, corrige mais)")
+    _corrigir(app, "Ele nao viu a irmã.\nEla tipo sabia.")
+    # Nada é aplicado sozinho.
+    assert _corrigido(app).value == "Ele nao viu a irmã.\nEla tipo sabia."
+    sugestoes = [c for c in app.checkbox if c.key and c.key.startswith("sug_")]
+    assert len(sugestoes) == 2 and "em “Ele **nao** viu a irmã.”" in sugestoes[0].label
+    _botao(app, "Aceitar todas").click()
+    app.run()
+    assert _corrigido(app).value == "Ele não viu a irmã.\nEla como sabia."
+    assert all(c.value for c in app.checkbox if c.key and c.key.startswith("sug_"))
+    # A revisão fica guardada: corrigir de novo não chama a IA.
+    assert db.ler_revisao_ia(f"{ia.MODELO}#{ia.VERSAO_INSTRUCOES}", "Ela tipo sabia.") == "Ela como sabia."
+
+
+def test_ia_indisponivel_avisa(app, monkeypatch):
+    monkeypatch.setattr(ia, "disponivel", lambda: (False, "O Ollama não está rodando."))
+    next(r for r in app.radio if r.label == "Revisar com").set_value("IA local – Gemma 4 (lenta, corrige mais)")
+    app.run()
+    assert any("Ollama não está rodando" in w.value for w in app.warning)
