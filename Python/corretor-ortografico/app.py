@@ -1,5 +1,6 @@
 import json
 import math
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -8,6 +9,7 @@ import streamlit as st
 import analise
 import db
 import docx_io
+import ia
 from corretor import (
     MOTIVO_DIALOGO,
     MOTIVO_FIXA,
@@ -124,15 +126,25 @@ def _exibir_sugestoes(registro: dict, editavel: bool, travado: bool) -> bool:
         return False
 
     st.caption("Não são aplicadas automaticamente. Marque ou escolha as que quiser aceitar.")
+    if not travado:
+        col_todas, col_nenhuma, _ = st.columns([1, 1, 3])
+        for coluna, rotulo, valor in ((col_todas, "Aceitar todas", True), (col_nenhuma, "Recusar todas", False)):
+            if coluna.button(rotulo, key=f"sug_todas_{rid}_{valor}"):
+                for c in sugestoes:
+                    c["aceita"] = valor
+                _salvar(registro)
+                st.rerun()
     mudou = False
     for c in sugestoes:
-        # Chave pelo trecho, não pela posição: aplicar uma observação muda a lista.
-        chave = f"sug_{rid}_{c.get('offset')}_{c['original']}"
+        # Chave pelo trecho e pela decisão salva, não pela posição: aplicar uma observação
+        # muda a lista, e "Aceitar todas" muda o valor sem passar pelo checkbox.
+        chave = f"sug_{rid}_{c.get('offset')}_{c['original']}_{c['aceita']}"
+        contexto = f" — em “{c['contexto']}”" if c.get("contexto") else ""
         if c.get("opcoes"):
             manter = f"manter “{c['original']}”"
             opcoes = [manter, *c["opcoes"]]
             escolha = st.radio(
-                f"“{c['original']}” — {c['motivo']}",
+                f"“{c['original']}” — {c['motivo']}{contexto}",
                 opcoes,
                 index=opcoes.index(c["corrigido"]) if c["aceita"] else 0,
                 horizontal=True,
@@ -145,7 +157,7 @@ def _exibir_sugestoes(registro: dict, editavel: bool, travado: bool) -> bool:
             c["aceita"], c["corrigido"] = aceita, corrigido
             continue
         aceita = st.checkbox(
-            f"“{c['original']}” → “{c['corrigido']}” — {c['motivo']}",
+            f"“{c['original']}” → “{c['corrigido']}” — {c['motivo']}{contexto}",
             value=c["aceita"],
             disabled=travado,
             key=f"{chave}_{c['corrigido']}",
@@ -304,7 +316,7 @@ def exibir_resultado(registro: dict, editavel: bool) -> None:
 
 
 st.title("✍️ Corretor de Textos")
-st.caption("Revisão ortográfica e gramatical preservando o estilo do autor · LanguageTool (offline, gratuito)")
+st.caption("Revisão ortográfica e gramatical preservando o estilo do autor · LanguageTool ou IA local (offline, gratuito)")
 
 aba_corrigir, aba_historico, aba_dicionario, aba_backup = st.tabs(["Corrigir", "Histórico", "Dicionário", "Backup"])
 
@@ -318,6 +330,23 @@ with aba_corrigir:
             type=["docx", "pdf"],
         )
 
+    ia_ok, ia_situacao = ia.disponivel()
+    motor = st.radio(
+        "Revisar com",
+        ["LanguageTool (rápido)", "IA local – Gemma 4 (lenta, corrige mais)"],
+        horizontal=True,
+        help="A IA pega mais erros, mas leva cerca de 1 minuto a cada 75 palavras neste computador."
+        " Tudo o que ela muda vira sugestão para você conferir.",
+    )
+    usar_ia = motor.startswith("IA")
+    if usar_ia and not ia_ok:
+        st.warning(ia_situacao)
+    elif usar_ia and modo == "Colar texto" and texto.strip():
+        st.caption(
+            f"Estimativa: cerca de {ia.estimativa_minutos(texto)} min. Se interromper, os parágrafos já"
+            " revisados são aproveitados na próxima vez."
+        )
+
     # Sem "disabled": o text_area só envia o valor ao perder o foco, então um botão
     # desabilitado engoliria o primeiro clique logo após digitar.
     if st.button("Corrigir texto", type="primary"):
@@ -325,13 +354,23 @@ with aba_corrigir:
             st.warning("Envie um arquivo para corrigir.")
         elif modo == "Colar texto" and not texto.strip():
             st.warning("Digite ou cole um texto para corrigir.")
+        elif usar_ia and not ia_ok:
+            st.warning(ia_situacao)
         else:
             barra = st.progress(0.0, text="Preparando...")
+            comeco = time.time()
 
             def progresso(feitos: int, total: int) -> None:
-                barra.progress(feitos / total, text=f"Revisando o texto... parte {feitos} de {total}")
+                restante = (time.time() - comeco) / feitos * (total - feitos)
+                previsao = f" · falta cerca de {math.ceil(restante / 60)} min" if usar_ia and feitos < total else ""
+                barra.progress(feitos / total, text=f"Revisando o texto... parte {feitos} de {total}{previsao}")
 
-            with st.spinner("Revisando... (a primeira correção demora mais: o LanguageTool está iniciando)"):
+            aviso = (
+                "Revisando com a IA... (deixe esta aba aberta)"
+                if usar_ia
+                else "Revisando... (a primeira correção demora mais: o LanguageTool está iniciando)"
+            )
+            with st.spinner(aviso):
                 arquivo, arquivo_dados = "", None
                 try:
                     if modo == "Enviar arquivo":
@@ -341,9 +380,16 @@ with aba_corrigir:
                             texto = docx_io.extrair_texto(arquivo_dados)
                         else:
                             texto = extrair_pdf(enviado.getvalue())
-                    resultado = corrigir(
-                        texto, set(db.listar_ignoradas()), db.listar_fixas(), set(db.listar_regras()), progresso
-                    )
+                    dicionario = (set(db.listar_ignoradas()), db.listar_fixas(), set(db.listar_regras()))
+                    if usar_ia:
+                        resultado, falhas = ia.corrigir_com_ia(texto, *dicionario, progresso, cache=db)
+                        if falhas:
+                            st.warning(
+                                f"A IA não devolveu uma revisão aproveitável em {falhas} parágrafo(s);"
+                                " eles ficaram sem sugestões."
+                            )
+                    else:
+                        resultado = corrigir(texto, *dicionario, progresso)
                 except ErroCorrecao as e:
                     st.error(str(e))
                 else:

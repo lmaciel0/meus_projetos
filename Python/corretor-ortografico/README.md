@@ -1,6 +1,22 @@
 # Corretor de Textos
 
-Sistema local e gratuito de revisão de textos de ficção em português do Brasil, usando LanguageTool, Streamlit e SQLite. Funciona offline e não usa nenhuma API paga.
+Sistema local e gratuito de revisão de textos de ficção em português do Brasil, usando LanguageTool (ou uma IA local, opcional), Streamlit e SQLite. Funciona offline e não usa nenhuma API paga.
+
+## Revisão com IA local (opcional)
+
+Na aba Corrigir, em **Revisar com**, dá para trocar o LanguageTool por uma IA que roda no próprio computador: o Gemma 4 E4B, pelo [Ollama](https://ollama.com). Ela entende o contexto e pega muito mais erros de digitação: num teste com dois trechos de ficção digitados às pressas, corrigiu 43 de 55 erros, contra 17 do LanguageTool.
+
+- **Tudo o que a IA muda vira sugestão com checkbox**, com um trecho da frase em volta. Nada entra no texto sozinho, porque às vezes ela muda o sentido ("ele e a Kessa" → "ele é a Kessa"). Use **Aceitar todas** / **Recusar todas** para decidir de uma vez e desmarque o que estiver errado.
+- **Continuam valendo** o dicionário pessoal (a IA recebe os nomes e não pode trocá-los), as correções fixas, os travessões e as repetições. Marcas de oralidade ("pra", "tá") não são trocadas pela forma formal.
+- **É lenta sem placa de vídeo:** cerca de 1 minuto a cada 75 palavras num notebook comum, então um capítulo de 3.000 palavras leva uns 40 minutos. O texto vai em blocos de parágrafos, com barra de progresso e estimativa do tempo restante. Os parágrafos revisados ficam guardados no `historico.db`: se a revisão for interrompida, a próxima continua de onde parou.
+
+Para usar: instale o [Ollama](https://ollama.com/download) e baixe o modelo (6,1 GB) no terminal:
+
+```bash
+ollama pull gemma4:e4b-it-qat
+```
+
+O Ollama precisa estar aberto (ele fica na bandeja do Windows). Para usar outro modelo ou um Ollama em outra máquina, defina as variáveis de ambiente `CORRETOR_MODELO_IA` e `CORRETOR_OLLAMA_URL`. Modelos com final `:cloud` rodam fora do computador e não são recomendados.
 
 - **Aplicado automaticamente:** ortografia, acentuação, pontuação, crase e maiúsculas. Palavras grudadas ("noslençois") são separadas e corrigidas ("nos lençóis").
 - **Sugestão com checkbox:** concordância verbal e nominal, e correções de ortografia muito diferentes da palavra original (mais de 2 letras, sem contar acentos). O LanguageTool erra com mais frequência nesses casos, então cada uma só entra no texto se você marcar. A escolha fica salva no histórico. Quando não dá para saber se a palavra tem um erro de digitação ou está grudada na seguinte ("decasa": "década" ou "de casa"?), você escolhe entre as opções.
@@ -46,6 +62,7 @@ PDFs escaneados (imagem) não têm texto. Se o [OCRmyPDF](https://ocrmypdf.readt
 
 - Python 3.10+
 - Java 17+ (o LanguageTool roda localmente em Java)
+- Opcional: [Ollama](https://ollama.com) com o modelo `gemma4:e4b-it-qat`, para a revisão com IA (16 GB de RAM recomendados)
 
 ## Como rodar
 
@@ -63,6 +80,7 @@ python -m venv .venv
 
 - `app.py` – interface Streamlit (abas Corrigir, Histórico, Dicionário e Backup)
 - `corretor.py` – verificação com LanguageTool (em blocos, com cache) e aplicação das correções
+- `ia.py` – revisão com IA local pelo Ollama, com as diferenças convertidas em sugestões
 - `analise.py` – repetições, nomes com grafias diferentes e estatísticas
 - `diferencas.py` – destaque das alterações
 - `docx_io.py` – leitura e escrita de `.docx` preservando a formatação
