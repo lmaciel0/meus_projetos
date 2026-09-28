@@ -21,7 +21,7 @@ Identificador de agencia bancaria/
 │
 ├── 📁 backend/                     # Java Spring Boot
 │   ├── pom.xml                     # Dependências Maven (Java 21)
-│   └── (src/ - será implementado)
+│   └── src/                        # Controller, Service, DTOs e config (CORS)
 │
 └── 📁 frontend/                    # React + Vite
     ├── package.json                # Dependências npm
@@ -66,28 +66,21 @@ Identificador de agencia bancaria/
 
 ## Próximas Etapas
 
-1. **Implementar Backend**
-   - Criar estrutura `src/main/java/com/banco/`
-   - Controller para endpoint `/api/processar`
-   - Service para processamento de arquivos
-   - DTOs para requisição/resposta
-   - Configuração CORS
-
-2. **Testar Localmente**
+1. **Testar Localmente**
    ```bash
    ./scripts/iniciar-projeto.sh   # Linux/macOS
    # ou
    scripts\iniciar-projeto.bat    # Windows
    ```
 
-3. **Documentação IDE**
+2. **Documentação IDE**
    - Criar `.vscode/launch.json` para debug
    - Adicionar IntelliJ run configs
 
-4. **CI/CD** (opcional)
+3. **CI/CD** (opcional)
    - GitHub Actions workflows
    - Build e deploy automatizado
 
 ---
 
-**Status:** ✅ Projeto profissionalizado e pronto para implementação do código
+**Status:** ✅ Projeto profissionalizado e backend implementado

@@ -63,7 +63,7 @@ O script automaticamente:
 ```bash
 cd backend
 mvn clean package -DskipTests
-java -jar target/identificador-agencia-0.0.1-SNAPSHOT.jar
+java -jar target/identificador-agencia.jar
 ```
 
 **Frontend:**
@@ -84,7 +84,12 @@ npm run dev
 │   ├── iniciar-projeto.sh     # Linux/macOS
 │   └── iniciar-projeto.bat    # Windows
 ├── backend/                    # Java Spring Boot
-│   └── pom.xml                # Dependências Maven
+│   ├── pom.xml                # Dependências Maven
+│   └── src/main/java/com/banco/identificador/
+│       ├── controller/        # POST /api/processar
+│       ├── service/           # Leitura dos arquivos posicionais
+│       ├── dto/               # Resposta JSON
+│       └── config/            # CORS e tratamento de erros
 └── frontend/                   # React + Vite + Tailwind
     ├── package.json           # Dependências npm
     ├── src/
