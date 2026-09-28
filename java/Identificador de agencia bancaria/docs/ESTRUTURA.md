@@ -17,8 +17,7 @@ Identificador de agencia bancaria/
 │   └── iniciar-projeto.bat         # Windows
 │
 ├── 📁 docs/                        # Documentação do projeto
-│   ├── Prompt.md                   # Especificação funcional original
-│   └── Redesign.md                 # Guia de design UI/UX
+│   └── ESTRUTURA.md                # Este arquivo
 │
 ├── 📁 backend/                     # Java Spring Boot
 │   ├── pom.xml                     # Dependências Maven (Java 21)

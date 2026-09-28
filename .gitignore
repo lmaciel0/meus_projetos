@@ -141,3 +141,25 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Java / Maven
+target/
+*.class
+
+# IDEs e sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Dados locais (documentos processados, bancos, planilhas geradas)
+*.pdf
+*.db
+*.sqlite
