@@ -2,10 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_DIR="$SCRIPT_DIR/backend"
-FRONTEND_DIR="$SCRIPT_DIR/frontend"
-BACKEND_LOG="$SCRIPT_DIR/backend.log"
-FRONTEND_LOG="$SCRIPT_DIR/frontend.log"
+# O script fica em scripts/; o projeto está na pasta acima.
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+FRONTEND_DIR="$PROJECT_DIR/frontend"
+BACKEND_LOG="$PROJECT_DIR/backend.log"
+FRONTEND_LOG="$PROJECT_DIR/frontend.log"
 
 if ! command -v java >/dev/null 2>&1; then
   if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
@@ -63,7 +65,7 @@ if ! command -v mvn >/dev/null 2>&1; then
 fi
 
 if [ ! -d "$BACKEND_DIR" ] || [ ! -d "$FRONTEND_DIR" ]; then
-  echo "ERRO: Estrutura do projeto nao encontrada em $SCRIPT_DIR"
+  echo "ERRO: Estrutura do projeto nao encontrada em $PROJECT_DIR"
   exit 1
 fi
 
@@ -75,7 +77,7 @@ if [ -f "$FRONTEND_LOG" ]; then
   rm -f "$FRONTEND_LOG"
 fi
 
-nohup bash -lc "cd '$BACKEND_DIR' && mvn -q -DskipTests package && java -jar target/identificador-agencia-0.0.1-SNAPSHOT.jar" > "$BACKEND_LOG" 2>&1 &
+nohup bash -lc "cd '$BACKEND_DIR' && mvn -q -DskipTests package && java -jar target/identificador-agencia.jar" > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
 nohup bash -lc "cd '$FRONTEND_DIR' && npm install && npm run dev -- --host 0.0.0.0 --port 5173" > "$FRONTEND_LOG" 2>&1 &
