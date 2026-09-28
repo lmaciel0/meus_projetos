@@ -79,8 +79,7 @@ npm run dev
 ├── README.md                    # Este arquivo
 ├── .gitignore                  # Padrões de exclusão Git
 ├── docs/                       # Documentação
-│   ├── Prompt.md              # Especificação funcional original
-│   └── Redesign.md            # Guia de design UI/UX
+│   └── ESTRUTURA.md           # Estrutura detalhada do projeto
 ├── scripts/                    # Scripts de inicialização
 │   ├── iniciar-projeto.sh     # Linux/macOS
 │   └── iniciar-projeto.bat    # Windows
