@@ -51,6 +51,8 @@
 
   <!-- Build Configuration -->
   <build>
+    <!-- Nome fixo do JAR usado pelos scripts de inicialização -->
+    <finalName>identificador-agencia</finalName>
     <plugins>
       <!-- Spring Boot Maven Plugin -->
       <plugin>
